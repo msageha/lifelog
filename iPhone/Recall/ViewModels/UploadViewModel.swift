@@ -21,6 +21,12 @@ final class UploadViewModel {
         self.modelContainer = modelContainer
     }
 
+    func setConnectivityCheck(_ check: @escaping @Sendable () async -> Bool) {
+        Task {
+            await chunkUploader.setConnectivityCheck(check)
+        }
+    }
+
     func startProcessing() {
         isUploading = true
         Task {
