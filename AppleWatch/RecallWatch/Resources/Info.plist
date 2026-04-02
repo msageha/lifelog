@@ -49,7 +49,6 @@
 	<array>
 		<string>audio</string>
 		<string>location</string>
-		<string>workout-processing</string>
 	</array>
 </dict>
 </plist>
