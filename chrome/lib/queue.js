@@ -32,7 +32,11 @@ function openDatabase() {
         }
       };
       request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error("Failed to open IndexedDB"));
+      request.onerror = () => {
+        // Reset so the next call retries instead of returning a permanently rejected promise
+        dbPromise = null;
+        reject(request.error || new Error("Failed to open IndexedDB"));
+      };
     });
   }
 

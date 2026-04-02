@@ -24,7 +24,8 @@ function normalizeUrl(urlString) {
     url.hash = "";
     for (const p of DEDUP_REMOVE_PARAMS) url.searchParams.delete(p);
     return url.href.replace(/\/+$/, "");
-  } catch {
+  } catch (err) {
+    console.debug("[lifelog] normalizeUrl failed:", err);
     return urlString;
   }
 }
@@ -76,43 +77,29 @@ let initializePromise = null;
 let stateChain = Promise.resolve();
 
 function serializeState(fn) {
-  stateChain = stateChain.then(fn, fn);
+  stateChain = stateChain.catch(() => {}).then(fn);
   return stateChain;
 }
 
-// --- Session persistence throttle ---
+// --- Session persistence (Service Worker safe — no setTimeout) ---
+// SESSION_FLUSH_DELAY_MS (2 s) is below chrome.alarms' 30 s minimum,
+// so we flush immediately to avoid data loss on SW termination.
+// A periodic alarm acts as a safety net for any missed flushes.
 let sessionDirty = false;
-let sessionFlushTimer = null;
+const SESSION_FLUSH_ALARM = "lifelog-session-flush";
 
 function markSessionDirty() {
   sessionDirty = true;
-  if (!sessionFlushTimer) {
-    sessionFlushTimer = setTimeout(flushSessionState, SESSION_FLUSH_DELAY_MS);
-  }
+  void flushSessionStateNow();
 }
 
-async function flushSessionState() {
-  sessionFlushTimer = null;
-  if (!sessionDirty) return;
-  sessionDirty = false;
-  try {
-    await chrome.storage.session.set({ [SESSION_KEY]: sessionState });
-  } catch {
-    // Worker may be shutting down
-  }
-}
-
-// Force-flush for boundary events (finalize, tab switch, tab close)
+// Force-flush for boundary events and normal dirty writes
 async function flushSessionStateNow() {
-  if (sessionFlushTimer) {
-    clearTimeout(sessionFlushTimer);
-    sessionFlushTimer = null;
-  }
   sessionDirty = false;
   try {
     await chrome.storage.session.set({ [SESSION_KEY]: sessionState });
   } catch {
-    // Worker may be shutting down
+    console.debug("[lifelog] flushSessionStateNow failed — worker may be shutting down");
   }
 }
 
@@ -184,7 +171,7 @@ function contentPreview(content, limit = 200) {
 let recentEntriesChain = Promise.resolve();
 
 function recordRecentEntry(entry, status) {
-  recentEntriesChain = recentEntriesChain.then(() => _writeRecentEntry(entry, status), () => _writeRecentEntry(entry, status));
+  recentEntriesChain = recentEntriesChain.catch(() => {}).then(() => _writeRecentEntry(entry, status));
   return recentEntriesChain;
 }
 
@@ -216,6 +203,12 @@ async function ensureAlarm() {
   const alarm = await chrome.alarms.get(ALARM_NAME);
   if (!alarm) {
     chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1 });
+  }
+  // Safety-net alarm: flush dirty session state in case SW survived but a
+  // prior immediate flush was skipped (e.g. rapid event bursts).
+  const sessionAlarm = await chrome.alarms.get(SESSION_FLUSH_ALARM);
+  if (!sessionAlarm) {
+    chrome.alarms.create(SESSION_FLUSH_ALARM, { periodInMinutes: 0.5 });
   }
 }
 
@@ -352,7 +345,8 @@ function buildEntry(tabState, contentState, dwellSeconds, engagement) {
   let parsedUrl;
   try {
     parsedUrl = new URL(tabState.url);
-  } catch {
+  } catch (err) {
+    console.debug("[lifelog] buildEntry: invalid URL:", err);
     return null;
   }
 
@@ -399,7 +393,8 @@ async function flushQueue() {
       sent += 1;
       // Update Activity status from "queued" to "sent"
       await recordRecentEntry(pendingEntries[index], "sent");
-    } catch {
+    } catch (err) {
+      console.debug("[lifelog] flushQueue: send failed at index", index, err);
       for (const entry of pendingEntries.slice(index)) {
         await enqueue(entry);
         requeued += 1;
@@ -438,7 +433,7 @@ async function finalizeVisit(tabId, reason) {
 
   // Parse domain from URL for consistent logging
   let logDomain = tabState.domain || "";
-  try { logDomain = new URL(tabState.url).hostname; } catch { /* keep fallback */ }
+  try { logDomain = new URL(tabState.url).hostname; } catch (err) { console.debug("[lifelog] domain parse failed:", err); }
 
   // Build a minimal entry for logging even if skipped
   const logEntry = {
@@ -503,7 +498,7 @@ async function finalizeVisit(tabId, reason) {
   if (status === "sent") {
     try {
       await chrome.tabs.sendMessage(tabId, { type: "show-ticker", message: "Sent to lifelog" });
-    } catch { /* tab may be closed */ }
+    } catch (err) { console.debug("[lifelog] ticker send failed (tab may be closed):", err); }
   }
 
   return entry;
@@ -773,6 +768,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       }
     });
   }
+  if (alarm.name === SESSION_FLUSH_ALARM && sessionDirty) {
+    void flushSessionStateNow();
+  }
 });
 
 chrome.idle.setDetectionInterval(IDLE_THRESHOLD_SECONDS);
@@ -795,7 +793,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const settings = await getSettings();
         const result = evaluateRules(message.url, settings.rules || [], settings);
         sendResponse({ ok: true, trackTweets: !!result.trackTweets, blocked: !!result.blocked });
-      } catch {
+      } catch (err) {
+        console.debug("[lifelog] site-config lookup failed:", err);
         sendResponse({ ok: false });
       }
     })();
