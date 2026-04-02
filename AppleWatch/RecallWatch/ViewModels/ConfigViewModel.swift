@@ -3,15 +3,29 @@ import Foundation
 @Observable
 @MainActor
 final class ConfigViewModel {
-    var uploadServerURL: String = ""
-    var telemetryServerURL: String = ""
-    var webSocketServerURL: String = ""
+    var uploadServerURL: String = "" {
+        didSet { SharedDefaults.set(uploadServerURL, for: .uploadServerURL) }
+    }
+    var telemetryServerURL: String = "" {
+        didSet { SharedDefaults.set(telemetryServerURL, for: .telemetryServerURL) }
+    }
+    var webSocketServerURL: String = "" {
+        didSet { SharedDefaults.set(webSocketServerURL, for: .webSocketServerURL) }
+    }
     var bearerToken: String = ""
 
-    var isHealthEnabled: Bool = true
-    var isLocationEnabled: Bool = true
-    var isMotionEnabled: Bool = true
-    var isWiFiOnly: Bool = true
+    var isHealthEnabled: Bool = true {
+        didSet { SharedDefaults.set(isHealthEnabled, for: .isHealthEnabled) }
+    }
+    var isLocationEnabled: Bool = true {
+        didSet { SharedDefaults.set(isLocationEnabled, for: .isLocationEnabled) }
+    }
+    var isMotionEnabled: Bool = true {
+        didSet { SharedDefaults.set(isMotionEnabled, for: .isMotionEnabled) }
+    }
+    var isWiFiOnly: Bool = true {
+        didSet { SharedDefaults.set(isWiFiOnly, for: .wifiOnlyUpload) }
+    }
 
     var storageUsedBytes: UInt64 = 0
     var storageCapacityBytes: UInt64 = Constants.Storage.capacityLimit
@@ -23,7 +37,9 @@ final class ConfigViewModel {
 
     func saveServerSettings() {
         try? KeychainHelper.save(key: "bearerToken", value: bearerToken)
-        // TODO: Persist server URLs
+        SharedDefaults.set(uploadServerURL, for: .uploadServerURL)
+        SharedDefaults.set(telemetryServerURL, for: .telemetryServerURL)
+        SharedDefaults.set(webSocketServerURL, for: .webSocketServerURL)
     }
 
     private func loadFromKeychain() {
@@ -31,6 +47,9 @@ final class ConfigViewModel {
     }
 
     private func loadFromDefaults() {
+        uploadServerURL = SharedDefaults.string(for: .uploadServerURL) ?? ""
+        telemetryServerURL = SharedDefaults.string(for: .telemetryServerURL) ?? ""
+        webSocketServerURL = SharedDefaults.string(for: .webSocketServerURL) ?? ""
         isWiFiOnly = SharedDefaults.bool(for: .wifiOnlyUpload)
         isHealthEnabled = SharedDefaults.bool(for: .isHealthEnabled)
         isLocationEnabled = SharedDefaults.bool(for: .isLocationEnabled)
