@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 
 function extractBearerToken(header: string | undefined): string | null {
   if (!header) return null;
@@ -14,7 +15,9 @@ export function verifyAuth(
   if (!token) {
     return { valid: false, error: "Missing or malformed Authorization header" };
   }
-  if (token !== gatewayToken) {
+  const a = Buffer.from(token, "utf-8");
+  const b = Buffer.from(gatewayToken, "utf-8");
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
     return { valid: false, error: "Invalid token" };
   }
   return { valid: true };
