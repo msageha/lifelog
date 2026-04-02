@@ -50,6 +50,17 @@ Thumbs.db
 *.p12
 *.mobileprovision
 *.provisionprofile
+.env
+.env.local
+.env.*
+!.env.example
+!.env.local.example
+credentials.json
+*.key
+*.pem
+*.secret
+*.p8
+serviceaccount*.json
 
 # CoreML model (large binary — download or generate separately)
 *.mlmodel
