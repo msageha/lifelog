@@ -1,5 +1,8 @@
+import OSLog
 import SwiftData
 import SwiftUI
+
+private let logger = Logger(subsystem: "com.recall", category: "App")
 
 @main
 struct RecallApp: App {
@@ -8,7 +11,15 @@ struct RecallApp: App {
     private let modelContainer: ModelContainer
 
     init() {
-        modelContainer = ModelContainerSetup.create()
+        do {
+            modelContainer = try ModelContainerSetup.create()
+        } catch {
+            logger.fault("ModelContainer creation failed: \(error.localizedDescription). Using in-memory fallback.")
+            modelContainer = try! ModelContainer(
+                for: AudioChunk.self, TelemetrySample.self, HealthSnapshot.self, AgentMessage.self,
+                configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+            )
+        }
     }
 
     var body: some Scene {
