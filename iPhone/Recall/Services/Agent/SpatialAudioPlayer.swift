@@ -4,6 +4,10 @@ import OSLog
 
 private let logger = Logger(subsystem: "com.recall", category: "SpatialAudio")
 
+enum SpatialAudioPlayerError: Error {
+    case audioFormatCreationFailed
+}
+
 actor SpatialAudioPlayer {
     private var engine: AVAudioEngine?
     private var environmentNode: AVAudioEnvironmentNode?
@@ -14,12 +18,14 @@ actor SpatialAudioPlayer {
     var distance: Float = 1.0
     var volume: Float = 1.0
 
-    init() {
-        // Default mono format at 16kHz for decoded audio
-        outputFormat = AVAudioFormat(
+    init() throws {
+        guard let format = AVAudioFormat(
             standardFormatWithSampleRate: Constants.Audio.sampleRate,
             channels: 1
-        ) ?? AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+        ) ?? AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1) else {
+            throw SpatialAudioPlayerError.audioFormatCreationFailed
+        }
+        outputFormat = format
     }
 
     func setup() throws {
@@ -43,11 +49,13 @@ actor SpatialAudioPlayer {
     }
 
     func play(audioData: Data) async throws {
-        guard let engine, engine.isRunning,
-              let playerNode else {
+        if engine == nil || !(engine?.isRunning ?? false) || playerNode == nil {
             logger.warning("Audio engine not running, setting up")
             try setup()
-            try await play(audioData: audioData)
+        }
+
+        guard let engine, engine.isRunning, let playerNode else {
+            logger.error("Audio engine setup failed")
             return
         }
 
