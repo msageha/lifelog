@@ -1,0 +1,21 @@
+{
+  "name": "@lifelog/openclaw-gateway-plugin",
+  "version": "2026.4.2",
+  "description": "OpenClaw gateway plugin for lifelog telemetry, web history, and voice transcripts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "install": {
+      "localPath": "openclaw-gateway-plugin",
+      "defaultChoice": "local"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

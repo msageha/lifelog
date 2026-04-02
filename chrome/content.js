@@ -1,0 +1,424 @@
+// --- Context validity guard ---
+// When the extension context is invalidated (update, SW restart),
+// content scripts become orphaned. Detect and clean up all timers/observers.
+let contextAlive = true;
+const cleanupCallbacks = [];
+
+function isContextValid() {
+  if (!contextAlive) return false;
+  try {
+    void chrome.runtime.id;
+    return true;
+  } catch {
+    contextAlive = false;
+    for (const cb of cleanupCallbacks) {
+      try { cb(); } catch { /* ignore */ }
+    }
+    cleanupCallbacks.length = 0;
+    return false;
+  }
+}
+
+const MAX_CONTENT_LENGTH = 5000;
+const ROOT_SELECTORS = ["article", "main", '[role="main"]'];
+const REMOVE_SELECTORS = [
+  "script",
+  "style",
+  "noscript",
+  "nav",
+  "header",
+  "footer",
+  "aside",
+  "form",
+  "dialog",
+  "svg",
+  "canvas",
+  "video",
+  "audio",
+  "iframe",
+  // Anti-injection: remove hidden elements that could carry invisible text
+  '[aria-hidden="true"]',
+  "[hidden]",
+  '[style*="display:none"]',
+  '[style*="display: none"]',
+  '[style*="visibility:hidden"]',
+  '[style*="visibility: hidden"]',
+  '[style*="opacity:0"]',
+  '[style*="opacity: 0"]',
+  '[style*="font-size:0"]',
+  '[style*="font-size: 0"]',
+  '[style*="height:0"]',
+  '[style*="height: 0"]',
+  '[style*="width:0"]',
+  '[style*="width: 0"]',
+  '[style*="overflow:hidden"][style*="height:1px"]'
+].join(",");
+
+// Zero-width and invisible characters used to smuggle injection text
+const INVISIBLE_CHARS = /[\u200B\u200C\u200D\u200E\u200F\u2060\u2061\u2062\u2063\u2064\uFEFF\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u2000-\u200A\u202A-\u202E\u2066-\u2069\uFFA0\uFFF9-\uFFFB]/g;
+
+// Injection patterns targeting LLM prompt manipulation
+const INJECTION_PATTERNS = [
+  // Classic prompt injection markers
+  /\[system\]/gi,
+  /\[instruction\]/gi,
+  /\[INST\]/gi,
+  /<<SYS>>/gi,
+  /<\/SYS>/gi,
+  /ignore\s+(all\s+)?previous\s+instructions?/gi,
+  /ignore\s+(all\s+)?above\s+instructions?/gi,
+  /disregard\s+(all\s+)?previous/gi,
+  /you\s+are\s+now\s+/gi,
+  /act\s+as\s+(a\s+|an\s+)?/gi,
+  /new\s+instructions?:/gi,
+  /system\s*prompt:/gi,
+  /\bdo\s+not\s+follow\s+(any\s+)?previous/gi,
+  /override\s+(all\s+)?instructions/gi,
+  /forget\s+(all\s+)?(previous\s+)?instructions/gi,
+  // Tool call spoofing
+  /assistant\s+to=functions/gi,
+  /to=functions\.exec/gi,
+  /\bcode=json\b/gi,
+  // Command injection payloads
+  /\{"command"\s*:/gi,
+  /\{"command"\s*:\s*"(python3?|bash|sh|node|ruby|perl)/gi,
+  // Internal protocol keyword spoofing
+  /\btoolCallId\b/g,
+  /\btextSignature\b/g,
+  /\bthinkingSignature\b/g,
+  /\bpartialJson\b/g,
+  // Script-mixing attack
+  /[\u0C80-\u0CFF]{3,}.*(?:assistant|function|exec|command)/gi,
+  /[\u0530-\u058F]{3,}.*(?:assistant|function|exec|command)/gi,
+  /[\u10A0-\u10FF]{3,}.*(?:assistant|function|exec|command)/gi,
+];
+
+function stripInjectionPatterns(text) {
+  let result = text;
+  for (const pattern of INJECTION_PATTERNS) {
+    result = result.replace(pattern, "[FILTERED]");
+  }
+  return result;
+}
+
+function normalizeText(text) {
+  let normalized = (text || "").replace(INVISIBLE_CHARS, "").replace(/\s+/g, " ").trim();
+  normalized = stripInjectionPatterns(normalized);
+  return normalized;
+}
+
+function pickRootNode() {
+  for (const selector of ROOT_SELECTORS) {
+    const candidate = document.querySelector(selector);
+    if (candidate && normalizeText(candidate.innerText).length > 0) {
+      return candidate;
+    }
+  }
+  return document.body || document.documentElement;
+}
+
+function extractMeta(name, attribute = "name") {
+  const selector = `meta[${attribute}="${name}"]`;
+  const element = document.querySelector(selector);
+  return element?.content?.trim() || "";
+}
+
+function computeContentMetrics(rootClone) {
+  const allText = normalizeText(rootClone.innerText || "");
+  const allLinks = rootClone.querySelectorAll("a");
+  let linkTextLen = 0;
+  for (const a of allLinks) linkTextLen += (a.innerText || "").length;
+  const linkDensity = allText.length > 0 ? linkTextLen / allText.length : 0;
+
+  const paragraphs = rootClone.querySelectorAll("p");
+  const paraLengths = [];
+  for (const p of paragraphs) {
+    const len = normalizeText(p.innerText || "").length;
+    if (len > 10) paraLengths.push(len);
+  }
+  const avgParagraphLength = paraLengths.length > 0
+    ? Math.round(paraLengths.reduce((a, b) => a + b, 0) / paraLengths.length)
+    : 0;
+
+  return {
+    paragraphCount: paraLengths.length,
+    avgParagraphLength,
+    linkDensity: Math.round(linkDensity * 100) / 100,
+    hasArticleTag: !!document.querySelector("article")
+  };
+}
+
+function detectInjectionAttempt(rawText) {
+  for (const pattern of INJECTION_PATTERNS) {
+    pattern.lastIndex = 0;
+    if (pattern.test(rawText)) return true;
+  }
+  // Check for high density of invisible characters (smuggling indicator)
+  const invisibleCount = (rawText.match(INVISIBLE_CHARS) || []).length;
+  if (invisibleCount > 20) return true;
+  return false;
+}
+
+function extractPagePayload() {
+  const root = pickRootNode();
+  const clone = root.cloneNode(true);
+  clone.querySelectorAll(REMOVE_SELECTORS).forEach((node) => node.remove());
+
+  const rawText = clone.innerText || root.innerText || document.body?.innerText || "";
+  const injectionDetected = detectInjectionAttempt(rawText);
+  const content = normalizeText(rawText).slice(0, MAX_CONTENT_LENGTH);
+  const metrics = computeContentMetrics(clone);
+  if (injectionDetected) {
+    metrics.injectionDetected = true;
+  }
+
+  return {
+    ok: true,
+    url: window.location.href,
+    title: normalizeText(document.title),
+    content,
+    contentMetrics: metrics,
+    meta: {
+      description: extractMeta("description"),
+      ogTitle: extractMeta("og:title", "property"),
+      ogImage: extractMeta("og:image", "property")
+    }
+  };
+}
+
+try {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (!isContextValid()) return false;
+    if (message?.type === "extract-page-content") {
+      // Reset scroll tracking on new content extraction (SPA navigation)
+      maxScrollPct = 0;
+      try {
+        sendResponse(extractPagePayload());
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          url: window.location.href,
+          title: normalizeText(document.title),
+          content: "",
+          meta: {}
+        });
+      }
+      return false;
+    }
+
+    if (message?.type === "show-ticker") {
+      showTicker(message.message || "Sent to lifelog");
+      return false;
+    }
+
+    return undefined;
+  });
+} catch {
+  // extension context invalidated — content script orphaned
+}
+
+// --- Ticker notification ---
+
+function showTicker(text) {
+  const host = document.createElement("div");
+  host.id = "lifelog-ticker-host";
+  const shadow = host.attachShadow({ mode: "closed" });
+  shadow.innerHTML = `
+    <style>
+      :host { all: initial; }
+      .ticker {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 2147483647;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(99, 179, 237, 0.12);
+        backdrop-filter: blur(8px);
+        color: #63b3ed;
+        font: 600 12px/1 -apple-system, sans-serif;
+        letter-spacing: 0.04em;
+        opacity: 1;
+        transition: opacity 0.4s ease-out;
+        pointer-events: none;
+      }
+    </style>
+    <div class="ticker">${text.replace(/</g, "&lt;")}</div>
+  `;
+  // Remove any existing ticker
+  document.getElementById("lifelog-ticker-host")?.remove();
+  document.documentElement.appendChild(host);
+  setTimeout(() => {
+    shadow.querySelector(".ticker").style.opacity = "0";
+    setTimeout(() => host.remove(), 500);
+  }, 10000);
+}
+
+// --- Engagement tracking ---
+
+function sendEngagement(payload) {
+  if (!isContextValid()) return;
+  try {
+    chrome.runtime.sendMessage({
+      ...payload,
+      pageUrl: window.location.href,
+      sentAt: Date.now()
+    }).catch(() => {});
+  } catch {
+    contextAlive = false;
+  }
+}
+
+// Visibility tracking
+function onVisibilityChange() {
+  if (!isContextValid()) return;
+  sendEngagement({ type: "engagement:visibility", hidden: document.hidden });
+}
+document.addEventListener("visibilitychange", onVisibilityChange);
+cleanupCallbacks.push(() => document.removeEventListener("visibilitychange", onVisibilityChange));
+
+// Scroll depth tracking (throttled, passive)
+let maxScrollPct = 0;
+let scrollTimer = null;
+
+function computeScrollPct() {
+  const scrollTop = window.scrollY || document.documentElement.scrollTop;
+  const docHeight = Math.max(
+    document.documentElement.scrollHeight,
+    document.body?.scrollHeight || 0
+  );
+  const viewportHeight = window.innerHeight;
+  if (docHeight <= viewportHeight) return 100;
+  return Math.min(100, Math.round(((scrollTop + viewportHeight) / docHeight) * 100));
+}
+
+function onScroll() {
+  if (!isContextValid()) return;
+  if (scrollTimer) return;
+  scrollTimer = setTimeout(() => {
+    scrollTimer = null;
+    if (!isContextValid()) return;
+    const pct = computeScrollPct();
+    if (pct > maxScrollPct) {
+      maxScrollPct = pct;
+      sendEngagement({ type: "engagement:scroll", scrollDepthPct: maxScrollPct });
+    }
+  }, 2000);
+}
+window.addEventListener("scroll", onScroll, { passive: true });
+cleanupCallbacks.push(() => {
+  window.removeEventListener("scroll", onScroll);
+  if (scrollTimer) { clearTimeout(scrollTimer); scrollTimer = null; }
+});
+
+// --- Post/tweet tracking (opt-in via rule trackTweets) ---
+
+function initTweetTracking() {
+  const TWEET_SELECTOR = 'article[data-testid="tweet"]';
+  const TWEET_DWELL_MS = 2000;
+
+  const viewStartMap = new WeakMap();
+  const reportedTweetIds = new Set();
+  const pendingReports = [];
+
+  function extractTweetData(article) {
+    const textEl = article.querySelector('[data-testid="tweetText"]');
+    const text = textEl?.innerText || "";
+
+    const userNameEl = article.querySelector('[data-testid="User-Name"]');
+    let author = "";
+    let handle = "";
+    if (userNameEl) {
+      author = userNameEl.querySelector("span")?.textContent?.trim() || "";
+      for (const span of userNameEl.querySelectorAll("span")) {
+        const t = span.textContent?.trim() || "";
+        if (t.startsWith("@")) { handle = t; break; }
+      }
+    }
+
+    const timeEl = article.querySelector("time");
+    const linkEl = timeEl?.closest("a");
+    const permalink = linkEl?.getAttribute("href") || "";
+    const tweetIdMatch = permalink.match(/\/status\/(\d+)/);
+    const tweetId = tweetIdMatch?.[1] || "";
+
+    return { tweetId, author, handle, text, permalink };
+  }
+
+  const intersectionObserver = new IntersectionObserver((entries) => {
+    const now = Date.now();
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        viewStartMap.set(entry.target, now);
+      } else {
+        const start = viewStartMap.get(entry.target);
+        viewStartMap.delete(entry.target);
+        if (start && (now - start) >= TWEET_DWELL_MS) {
+          const data = extractTweetData(entry.target);
+          if (data.tweetId && !reportedTweetIds.has(data.tweetId)) {
+            reportedTweetIds.add(data.tweetId);
+            pendingReports.push({
+              ...data,
+              viewSeconds: Math.round((now - start) / 1000)
+            });
+          }
+        }
+      }
+    }
+  }, { threshold: 0.5 });
+
+  function observeTweet(node) {
+    if (node.dataset.lifelogTracked) return;
+    node.dataset.lifelogTracked = "1";
+    intersectionObserver.observe(node);
+  }
+
+  document.querySelectorAll(TWEET_SELECTOR).forEach(observeTweet);
+
+  const mutationObserver = new MutationObserver((mutations) => {
+    if (!isContextValid()) { mutationObserver.disconnect(); return; }
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        if (node.matches?.(TWEET_SELECTOR)) {
+          observeTweet(node);
+        } else {
+          const tweets = node.querySelectorAll?.(TWEET_SELECTOR);
+          if (tweets) tweets.forEach(observeTweet);
+        }
+      }
+    }
+  });
+  mutationObserver.observe(document.body, { childList: true, subtree: true });
+
+  const tweetInterval = setInterval(() => {
+    if (!isContextValid()) { clearInterval(tweetInterval); return; }
+    if (pendingReports.length === 0) return;
+    const batch = pendingReports.splice(0);
+    sendEngagement({ type: "engagement:x-tweets", tweets: batch });
+  }, 5000);
+
+  cleanupCallbacks.push(() => {
+    intersectionObserver.disconnect();
+    mutationObserver.disconnect();
+    clearInterval(tweetInterval);
+  });
+}
+
+// Ask background if trackTweets is enabled for this domain
+try {
+  chrome.runtime.sendMessage(
+    { type: "content:get-site-config", url: location.href },
+    (response) => {
+      if (response?.ok && response.trackTweets) {
+        initTweetTracking();
+      }
+    }
+  );
+} catch {
+  // extension context invalidated
+}
