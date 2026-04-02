@@ -74,12 +74,13 @@ let lastLocationNewAt: string | null = null;
 let lastHealthAt: string | null = null;
 
 // Periodic cleanup of expired dedup entries
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const cutoff = Date.now() - DEDUP_TTL_MS;
   for (const [id, ts] of seenIds) {
     if (ts < cutoff) seenIds.delete(id);
   }
 }, CLEANUP_INTERVAL_MS);
+cleanupTimer.unref?.();
 
 export function isDuplicate(id: string): boolean {
   if (!id) return false;
