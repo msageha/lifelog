@@ -5,13 +5,24 @@ import OSLog
 private let logger = Logger(subsystem: "com.recall.watch", category: "AudioSession")
 
 enum AudioSessionManager {
+    private static var interruptionObserver: (any NSObjectProtocol)?
+    private static var routeChangeObserver: (any NSObjectProtocol)?
+
     static func configure() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .default)
         try session.setPreferredSampleRate(Constants.Audio.sampleRate)
         try session.setActive(true)
 
-        NotificationCenter.default.addObserver(
+        // Remove previous observers to prevent duplicates
+        if let token = interruptionObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
+        if let token = routeChangeObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
+
+        interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: session,
             queue: .main
@@ -19,7 +30,7 @@ enum AudioSessionManager {
             handleInterruption(notification)
         }
 
-        NotificationCenter.default.addObserver(
+        routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: session,
             queue: .main

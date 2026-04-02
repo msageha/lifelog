@@ -32,7 +32,10 @@ actor ChunkUploader {
         let endpoint = Constants.Network.ingestEndpoint
 
         // Build the request
-        var request = URLRequest(url: URL(string: endpoint)!)
+        guard let url = URL(string: endpoint) else {
+            throw ChunkUploadError.invalidEndpointURL
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(
             "multipart/form-data; boundary=\(boundary)",
@@ -128,6 +131,10 @@ struct ChunkMetadata: Codable, Sendable {
 }
 
 // MARK: - Data Extension
+
+enum ChunkUploadError: Error {
+    case invalidEndpointURL
+}
 
 private extension Data {
     mutating func appendString(_ string: String) {
