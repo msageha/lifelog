@@ -1,6 +1,7 @@
 import { sendEntries, checkHealth } from "./lib/api.js";
 import { count as getQueueCount, dequeueAll, enqueue } from "./lib/queue.js";
 import { DEFAULT_RULES, evaluateRules, isTrackableUrl, migrateBlocklistToRules } from "./lib/filter.js";
+import { encrypt, decrypt } from "./lib/crypto.js";
 
 const SETTINGS_KEY = "lifelogSettings";
 const RECENT_ENTRIES_KEY = "lifelogRecentEntries";
@@ -159,18 +160,30 @@ async function ensureHydrated() {
 
 async function getSettings() {
   const stored = await chrome.storage.local.get({ [SETTINGS_KEY]: DEFAULT_SETTINGS });
-  return sanitizeSettings(stored[SETTINGS_KEY]);
+  const raw = stored[SETTINGS_KEY];
+  // Decrypt token if encrypted
+  if (raw.token && typeof raw.token === "object" && raw.token._encrypted) {
+    raw.token = await decrypt(raw.token);
+  }
+  return sanitizeSettings(raw);
 }
 
 async function saveSettings(nextSettings) {
   const settings = sanitizeSettings(nextSettings);
-  await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+  // Encrypt token before persisting
+  const toStore = { ...settings, token: await encrypt(settings.token) };
+  await chrome.storage.local.set({ [SETTINGS_KEY]: toStore });
   return settings;
 }
 
 async function getRecentEntries() {
   const stored = await chrome.storage.local.get({ [RECENT_ENTRIES_KEY]: [] });
-  return Array.isArray(stored[RECENT_ENTRIES_KEY]) ? stored[RECENT_ENTRIES_KEY] : [];
+  const raw = stored[RECENT_ENTRIES_KEY];
+  // Decrypt if stored as encrypted envelope
+  if (raw && typeof raw === "object" && raw._encrypted) {
+    return await decrypt(raw);
+  }
+  return Array.isArray(raw) ? raw : [];
 }
 
 function contentPreview(content, limit = 200) {
@@ -209,7 +222,7 @@ async function _writeRecentEntry(entry, status) {
     })
   ].slice(0, MAX_RECENT_ENTRIES);
 
-  await chrome.storage.local.set({ [RECENT_ENTRIES_KEY]: nextEntries });
+  await chrome.storage.local.set({ [RECENT_ENTRIES_KEY]: await encrypt(nextEntries) });
 }
 
 async function ensureAlarm() {
@@ -781,6 +794,9 @@ chrome.idle.onStateChanged.addListener((newState) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Verify message sender is this extension
+  if (sender.id !== chrome.runtime.id) return;
+
   if (typeof message?.type === "string" && message.type.startsWith("engagement:") && sender.tab?.id) {
     void serializeState(() => handleEngagementMessage(message, sender.tab.id))
       .then(() => sendResponse({ ok: true }))
