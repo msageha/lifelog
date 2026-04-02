@@ -8,10 +8,19 @@ actor WebSocketClient {
     private var isConnected = false
     private var reconnectAttempts = 0
     private let maxReconnectDelay: TimeInterval = 60.0
+    private let baseReconnectDelay: TimeInterval = 1.0
+
+    private var storedURL: URL?
+    private var storedToken: String?
+    private var isIntentionalDisconnect = false
 
     var onMessage: (@Sendable (URLSessionWebSocketTask.Message) async -> Void)?
 
     func connect(url: URL, token: String) {
+        isIntentionalDisconnect = false
+        storedURL = url
+        storedToken = token
+
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
@@ -26,10 +35,11 @@ actor WebSocketClient {
     }
 
     func disconnect() {
+        isIntentionalDisconnect = true
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
         isConnected = false
-        logger.info("WebSocket disconnected")
+        logger.info("WebSocket disconnected intentionally")
     }
 
     private func receiveLoop() async {
@@ -41,15 +51,36 @@ actor WebSocketClient {
         } catch {
             logger.error("WebSocket receive error: \(error)")
             isConnected = false
-            await scheduleReconnect()
+            if !isIntentionalDisconnect {
+                await scheduleReconnect()
+            }
         }
     }
 
     private func scheduleReconnect() async {
+        guard !isIntentionalDisconnect else { return }
+        guard let url = storedURL, let token = storedToken else {
+            logger.warning("Cannot reconnect: no stored URL or token")
+            return
+        }
+
         reconnectAttempts += 1
-        let delay = min(pow(2.0, Double(reconnectAttempts)), maxReconnectDelay)
-        logger.info("Reconnecting in \(delay)s (attempt \(self.reconnectAttempts))")
-        try? await Task.sleep(for: .seconds(delay))
-        // TODO: Reconnect using stored URL and token
+        let exponentialDelay = min(baseReconnectDelay * pow(2.0, Double(reconnectAttempts - 1)), maxReconnectDelay)
+
+        // Add ±20% jitter to avoid thundering herd
+        let jitterFactor = Double.random(in: 0.8...1.2)
+        let delay = exponentialDelay * jitterFactor
+
+        logger.info("Reconnecting in \(String(format: "%.1f", delay))s (attempt \(self.reconnectAttempts))")
+
+        do {
+            try await Task.sleep(for: .seconds(delay))
+        } catch {
+            logger.debug("Reconnect sleep cancelled")
+            return
+        }
+
+        guard !isIntentionalDisconnect else { return }
+        connect(url: url, token: token)
     }
 }
