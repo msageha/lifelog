@@ -6,7 +6,26 @@ struct UploadStatusIntent: AppIntent {
     static let openAppWhenRun: Bool = false
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // TODO: Read actual counts from shared state
-        return .result(dialog: "Upload status check is not yet implemented")
+        let pending = SharedDefaults.integer(for: .pendingChunkCount)
+        let uploaded = SharedDefaults.integer(for: .uploadedChunkCount)
+        let lastUpload = SharedDefaults.date(for: .lastUploadDate)
+
+        let lastUploadText: String
+        if let lastUpload {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .abbreviated
+            lastUploadText = formatter.localizedString(for: lastUpload, relativeTo: Date())
+        } else {
+            lastUploadText = "never"
+        }
+
+        let dialog: String
+        if pending == 0 && uploaded == 0 {
+            dialog = "No upload activity yet."
+        } else {
+            dialog = "Uploaded: \(uploaded) chunks. Pending: \(pending) chunks. Last upload: \(lastUploadText)."
+        }
+
+        return .result(dialog: "\(dialog)")
     }
 }

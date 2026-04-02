@@ -8,8 +8,11 @@ actor MotionActivityDetector {
     private let manager = CMMotionActivityManager()
     private(set) var currentActivity: DetectedActivity = .unknown
     private(set) var confidence: CMMotionActivityConfidence = .low
+    private weak var telemetryService: TelemetryService?
 
-    func start() {
+    func start(telemetry: TelemetryService? = nil) {
+        self.telemetryService = telemetry
+
         guard CMMotionActivityManager.isActivityAvailable() else {
             logger.warning("Motion activity not available")
             return
@@ -42,13 +45,19 @@ actor MotionActivityDetector {
         walking: Bool, running: Bool, automotive: Bool,
         cycling: Bool, stationary: Bool, confidence: CMMotionActivityConfidence
     ) {
+        let previousActivity = currentActivity
         self.confidence = confidence
+
         if walking { currentActivity = .walking }
         else if running { currentActivity = .running }
         else if automotive { currentActivity = .automotive }
         else if cycling { currentActivity = .cycling }
         else if stationary { currentActivity = .stationary }
         else { currentActivity = .unknown }
+
+        if currentActivity != previousActivity {
+            logger.info("Activity changed: \(previousActivity.rawValue) → \(self.currentActivity.rawValue) (confidence: \(String(describing: confidence)))")
+        }
     }
 }
 
