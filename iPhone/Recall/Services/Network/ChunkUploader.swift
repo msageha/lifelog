@@ -16,9 +16,15 @@ actor ChunkUploader {
     private let retryInterval: TimeInterval = Constants.Upload.retryInterval
     private var processingTask: Task<Void, Never>?
     private let modelContainer: ModelContainer
+    private var connectivityCheck: @Sendable () async -> Bool
 
-    init(modelContainer: ModelContainer) {
+    init(modelContainer: ModelContainer, connectivityCheck: @escaping @Sendable () async -> Bool = { true }) {
         self.modelContainer = modelContainer
+        self.connectivityCheck = connectivityCheck
+    }
+
+    func setConnectivityCheck(_ check: @escaping @Sendable () async -> Bool) {
+        self.connectivityCheck = check
     }
 
     func startProcessing() {
@@ -49,6 +55,11 @@ actor ChunkUploader {
     }
 
     private func processPendingChunks() async {
+        guard await connectivityCheck() else {
+            logger.debug("Network not available, skipping upload cycle")
+            return
+        }
+
         do {
             let pendingChunks = try await fetchPendingChunks()
             guard !pendingChunks.isEmpty else { return }

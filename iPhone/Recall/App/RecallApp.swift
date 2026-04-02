@@ -15,11 +15,20 @@ struct RecallApp: App {
             modelContainer = try ModelContainerSetup.create()
         } catch {
             logger.fault("Failed to create ModelContainer: \(error.localizedDescription)")
-            // Fallback to in-memory empty container
+            // Fallback to in-memory container with full schema
             do {
-                modelContainer = try ModelContainer(for: Schema([]))
+                let schema = Schema([
+                    AudioChunk.self,
+                    TelemetrySample.self,
+                    HealthSnapshot.self,
+                    AgentMessage.self,
+                ])
+                let config = ModelConfiguration(
+                    schema: schema,
+                    isStoredInMemoryOnly: true
+                )
+                modelContainer = try ModelContainer(for: schema, configurations: [config])
             } catch {
-                // This should never happen with an empty schema, but handle gracefully
                 logger.fault("Failed to create fallback ModelContainer: \(error.localizedDescription)")
                 fatalError("Cannot create any ModelContainer: \(error)")
             }

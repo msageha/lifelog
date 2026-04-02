@@ -50,6 +50,7 @@ enum LaunchSequence {
         let monitor = ConnectivityMonitor()
         monitor.start()
         connectivityMonitor = monitor
+        upload.setConnectivityCheck { @MainActor in monitor.canUpload }
         logger.info("[5/8] Connectivity monitor started")
 
         // 6. Enable telemetry streams, start TelemetryService
