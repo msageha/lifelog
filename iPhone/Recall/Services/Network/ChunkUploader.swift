@@ -29,15 +29,28 @@ actor ChunkUploader {
 
     func uploadChunk(fileURL: URL, metadata: ChunkMetadata) async throws {
         let boundary = "Boundary-\(UUID().uuidString)"
-        let endpoint = Constants.Network.ingestEndpoint
+
+        // Build URL safely from SharedDefaults base URL + ingest path
+        guard let baseURLString = SharedDefaults.string(for: .uploadServerURL),
+              let baseURL = URL(string: baseURLString) else {
+            throw ChunkUploaderError.noServerURL
+        }
+        let url = baseURL.appendingPathComponent(Constants.Network.ingestEndpoint)
+
+        // Load bearer token from Keychain
+        guard let token = KeychainHelper.load(key: "bearerToken"),
+              !token.isEmpty else {
+            throw ChunkUploaderError.noAuthToken
+        }
 
         // Build the request
-        var request = URLRequest(url: URL(string: endpoint)!)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(
             "multipart/form-data; boundary=\(boundary)",
             forHTTPHeaderField: "Content-Type"
         )
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         // Assemble multipart body
         let body = try buildMultipartBody(
@@ -125,6 +138,13 @@ struct ChunkMetadata: Codable, Sendable {
     let deviceId: String
     let startedAt: Date
     let timezone: String
+}
+
+// MARK: - Error Types
+
+enum ChunkUploaderError: Error {
+    case noServerURL
+    case noAuthToken
 }
 
 // MARK: - Data Extension
