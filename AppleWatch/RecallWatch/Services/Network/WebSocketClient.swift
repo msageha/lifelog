@@ -43,16 +43,18 @@ actor WebSocketClient {
     }
 
     private func receiveLoop() async {
-        guard let task = webSocketTask else { return }
-        do {
-            let message = try await task.receive()
-            await onMessage?(message)
-            await receiveLoop()
-        } catch {
-            logger.error("WebSocket receive error: \(error)")
-            isConnected = false
-            if !isIntentionalDisconnect {
-                await scheduleReconnect()
+        while isConnected {
+            guard let task = webSocketTask else { return }
+            do {
+                let message = try await task.receive()
+                await onMessage?(message)
+            } catch {
+                logger.error("WebSocket receive error: \(error)")
+                isConnected = false
+                if !isIntentionalDisconnect {
+                    await scheduleReconnect()
+                }
+                return
             }
         }
     }

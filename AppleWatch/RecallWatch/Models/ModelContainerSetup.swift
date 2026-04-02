@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 enum ModelContainerSetup {
-    static func create() -> ModelContainer {
+    static func create() throws -> ModelContainer {
         let schema = Schema([
             AudioChunk.self,
             TelemetrySample.self,
@@ -15,10 +15,6 @@ enum ModelContainerSetup {
             isStoredInMemoryOnly: false
         )
 
-        do {
-            return try ModelContainer(for: schema, configurations: [configuration])
-        } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
-        }
+        return try ModelContainer(for: schema, configurations: [configuration])
     }
 }

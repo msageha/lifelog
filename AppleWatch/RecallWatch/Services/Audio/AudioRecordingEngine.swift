@@ -29,12 +29,14 @@ actor AudioRecordingEngine {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let format = AVAudioFormat(
+        guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: Constants.Audio.sampleRate,
             channels: 1,
             interleaved: false
-        )!
+        ) else {
+            throw AudioEngineError.invalidFormat
+        }
 
         inputNode.installTap(onBus: 0, bufferSize: 1600, format: format) { [weak self] buffer, _ in
             guard let self else { return }
@@ -94,4 +96,8 @@ actor AudioRecordingEngine {
         var copy = ringBuffer
         return copy.readAll()
     }
+}
+
+enum AudioEngineError: Error {
+    case invalidFormat
 }

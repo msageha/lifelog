@@ -1,16 +1,25 @@
+import OSLog
 import WatchKit
+
+private let logger = Logger(subsystem: "com.recall.watch", category: "AppDelegate")
 
 final class WatchAppDelegate: NSObject, WKApplicationDelegate, Sendable {
     func applicationDidFinishLaunching() {
-        // App launch setup
+        logger.info("App did finish launching")
     }
 
     func applicationDidBecomeActive() {
-        // Resume tasks
+        logger.info("App became active")
+        Task { @MainActor in
+            if let manager = LaunchSequence.extendedRuntimeManager {
+                manager.restoreStateAfterResume()
+                manager.start()
+            }
+        }
     }
 
     func applicationWillResignActive() {
-        // Pause tasks
+        logger.info("App will resign active")
     }
 
     func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
