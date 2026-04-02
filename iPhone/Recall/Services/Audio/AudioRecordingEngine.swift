@@ -4,6 +4,10 @@ import OSLog
 
 private let logger = Logger(subsystem: "com.recall", category: "AudioRecordingEngine")
 
+enum AudioRecordingError: Error {
+    case invalidAudioFormat
+}
+
 actor AudioRecordingEngine {
     private var engine: AVAudioEngine?
     private var isRunning = false
@@ -29,12 +33,14 @@ actor AudioRecordingEngine {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let format = AVAudioFormat(
+        guard let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: Constants.Audio.sampleRate,
             channels: 1,
             interleaved: false
-        )!
+        ) else {
+            throw AudioRecordingError.invalidAudioFormat
+        }
 
         inputNode.installTap(onBus: 0, bufferSize: 1600, format: format) { [weak self] buffer, _ in
             guard let self else { return }

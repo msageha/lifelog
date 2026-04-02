@@ -8,7 +8,11 @@ struct RecallWatchApp: App {
     private let modelContainer: ModelContainer
 
     init() {
-        modelContainer = ModelContainerSetup.create()
+        do {
+            modelContainer = try ModelContainerSetup.create()
+        } catch {
+            fatalError("Failed to create ModelContainer: \(error)")
+        }
     }
 
     var body: some Scene {

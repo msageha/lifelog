@@ -224,36 +224,43 @@ function showTicker(text) {
   const host = document.createElement("div");
   host.id = "lifelog-ticker-host";
   const shadow = host.attachShadow({ mode: "closed" });
-  shadow.innerHTML = `
-    <style>
-      :host { all: initial; }
-      .ticker {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 2147483647;
-        height: 28px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(99, 179, 237, 0.12);
-        backdrop-filter: blur(8px);
-        color: #63b3ed;
-        font: 600 12px/1 -apple-system, sans-serif;
-        letter-spacing: 0.04em;
-        opacity: 1;
-        transition: opacity 0.4s ease-out;
-        pointer-events: none;
-      }
-    </style>
-    <div class="ticker">${text.replace(/</g, "&lt;")}</div>
+
+  const style = document.createElement("style");
+  style.textContent = `
+    :host { all: initial; }
+    .ticker {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 2147483647;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(99, 179, 237, 0.12);
+      backdrop-filter: blur(8px);
+      color: #63b3ed;
+      font: 600 12px/1 -apple-system, sans-serif;
+      letter-spacing: 0.04em;
+      opacity: 1;
+      transition: opacity 0.4s ease-out;
+      pointer-events: none;
+    }
   `;
+
+  const ticker = document.createElement("div");
+  ticker.className = "ticker";
+  ticker.textContent = text;
+
+  shadow.appendChild(style);
+  shadow.appendChild(ticker);
+
   // Remove any existing ticker
   document.getElementById("lifelog-ticker-host")?.remove();
   document.documentElement.appendChild(host);
   setTimeout(() => {
-    shadow.querySelector(".ticker").style.opacity = "0";
+    ticker.style.opacity = "0";
     setTimeout(() => host.remove(), 500);
   }, 10000);
 }
