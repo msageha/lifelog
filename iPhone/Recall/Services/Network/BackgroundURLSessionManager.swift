@@ -6,28 +6,20 @@ private let logger = Logger(subsystem: "com.recall", category: "BGURLSession")
 final class BackgroundURLSessionManager: NSObject, Sendable, URLSessionDelegate, URLSessionDataDelegate {
     static let shared = BackgroundURLSessionManager()
 
-    let session: URLSession
+    private(set) var session: URLSession!
 
     private let completionHandlers = CompletionHandlerStore()
 
     private override init() {
-        let config = URLSessionConfiguration.background(withIdentifier: "com.recall.background-upload")
-        config.isDiscretionary = false
-        config.sessionSendsLaunchEvents = true
-
-        let instance = BackgroundURLSessionManager.allocateUninitializedSession()
-        self.session = instance
         super.init()
 
-        // Re-create session with delegate after init
-        let _ = session
-    }
-
-    private static func allocateUninitializedSession() -> URLSession {
-        let config = URLSessionConfiguration.background(withIdentifier: "com.recall.background-upload")
+        let config = URLSessionConfiguration.background(
+            withIdentifier: Constants.Network.backgroundSessionIdentifier
+        )
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
-        return URLSession(configuration: config)
+
+        self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
     func setCompletionHandler(_ handler: @escaping @Sendable () -> Void, for identifier: String) {

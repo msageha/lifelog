@@ -76,7 +76,7 @@ final class ActivityLogger {
     func cleanOldLogs() {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: logDirectory, includingPropertiesForKeys: [.creationDateKey]) else { return }
-        let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date())!
+        guard let cutoff = Calendar.current.date(byAdding: .day, value: -retentionDays, to: Date()) else { return }
 
         for file in files {
             if let values = try? file.resourceValues(forKeys: [.creationDateKey]),

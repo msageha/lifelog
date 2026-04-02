@@ -114,7 +114,9 @@ actor HealthKitCollector {
         let sleepType = HKCategoryType(.sleepAnalysis)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
         let calendar = Calendar.current
-        let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: Date()))!
+        guard let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: Date())) else {
+            return SleepResult()
+        }
         let predicate = HKQuery.predicateForSamples(withStart: startOfYesterday, end: Date(), options: .strictStartDate)
 
         return try await withCheckedThrowingContinuation { continuation in
