@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import type { OpenClawApi, HttpHandler, OpenClawLogger } from "./types.js";
 import { verifyAuth } from "./auth.js";
+import { RateLimiter } from "./rate-limiter.js";
 import {
   getLastSuccessTimes,
   storeHealth,
@@ -11,7 +12,8 @@ import {
   storeSample,
 } from "./store.js";
 import type { HealthSummary, LocationSample, MotionActivity, NowPlaying } from "./store.js";
-import { readBody, sendError, sendJson } from "./http.js";
+import { readBody, sendError, sendJson, PayloadTooLargeError } from "./http.js";
+import { FileWriteQueue } from "./file-write-queue.js";
 
 const NEXT_MIN_INTERVAL_SEC = 60;
 
@@ -41,6 +43,8 @@ interface AggWindow {
 }
 
 let locationAggWindow: AggWindow | null = null;
+
+const fileWriteQueue = new FileWriteQueue();
 
 function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371000;
@@ -124,8 +128,10 @@ async function flushLocationAggWindow(log: OpenClawLogger | undefined): Promise<
   const diaryPath = join(MEMORY_ROOT, `${locationAggWindow.dateStr}.md`);
 
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.appendFile(diaryPath, line, "utf-8");
+    await fileWriteQueue.enqueue(diaryPath, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.appendFile(diaryPath, line, { encoding: "utf-8", mode: 0o600 });
+    });
     log?.debug?.(`recall-telemetry: location aggregated diary entry written to ${locationAggWindow.dateStr}.md`);
   } catch (err) {
     log?.warn?.(`recall-telemetry: failed to write aggregated diary: ${(err as Error).message}`);
@@ -216,8 +222,10 @@ async function maybeWriteHealthDiary(health: HealthSummary, log: OpenClawLogger 
   const diaryPath = join(MEMORY_ROOT, `${dateStr}.md`);
 
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.appendFile(diaryPath, line, "utf-8");
+    await fileWriteQueue.enqueue(diaryPath, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.appendFile(diaryPath, line, { encoding: "utf-8", mode: 0o600 });
+    });
     lastHealthDiaryWrite = now.getTime();
     log?.debug?.(`recall-telemetry: health diary entry written to ${dateStr}.md`);
   } catch (err) {
@@ -238,8 +246,10 @@ async function persistCurrentLocation(sample: LocationSample, log: OpenClawLogge
     source: "recall-telemetry",
   };
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.writeFile(CURRENT_LOCATION_PATH, JSON.stringify(state, null, 2), "utf-8");
+    await fileWriteQueue.enqueue(CURRENT_LOCATION_PATH, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.writeFile(CURRENT_LOCATION_PATH, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`recall-telemetry: failed to persist current-location.json: ${(err as Error).message}`);
   }
@@ -254,8 +264,10 @@ async function persistHealthState(health: HealthSummary, log: OpenClawLogger | u
     source: "recall-telemetry",
   };
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.writeFile(HEALTH_STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+    await fileWriteQueue.enqueue(HEALTH_STATE_PATH, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.writeFile(HEALTH_STATE_PATH, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`recall-telemetry: failed to persist health-state.json: ${(err as Error).message}`);
   }
@@ -270,8 +282,10 @@ async function persistMotionState(motion: MotionActivity, log: OpenClawLogger | 
     source: "recall-telemetry",
   };
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.writeFile(MOTION_STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+    await fileWriteQueue.enqueue(MOTION_STATE_PATH, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.writeFile(MOTION_STATE_PATH, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`recall-telemetry: failed to persist motion-state.json: ${(err as Error).message}`);
   }
@@ -286,8 +300,10 @@ async function persistNowPlayingState(nowPlaying: NowPlaying, log: OpenClawLogge
     source: "recall-telemetry",
   };
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.writeFile(NOW_PLAYING_STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+    await fileWriteQueue.enqueue(NOW_PLAYING_STATE_PATH, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.writeFile(NOW_PLAYING_STATE_PATH, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`recall-telemetry: failed to persist now-playing-state.json: ${(err as Error).message}`);
   }
@@ -309,8 +325,10 @@ async function maybeWriteMotionDiary(motion: MotionActivity, log: OpenClawLogger
 
   const diaryPath = join(MEMORY_ROOT, `${dateStr}.md`);
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.appendFile(diaryPath, line, "utf-8");
+    await fileWriteQueue.enqueue(diaryPath, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.appendFile(diaryPath, line, { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`recall-telemetry: failed to write motion diary: ${(err as Error).message}`);
   }
@@ -329,8 +347,10 @@ async function maybeWriteNowPlayingDiary(nowPlaying: NowPlaying, log: OpenClawLo
 
   const diaryPath = join(MEMORY_ROOT, `${dateStr}.md`);
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.appendFile(diaryPath, line, "utf-8");
+    await fileWriteQueue.enqueue(diaryPath, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.appendFile(diaryPath, line, { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`recall-telemetry: failed to write now playing diary: ${(err as Error).message}`);
   }
@@ -356,8 +376,10 @@ export function createTelemetryHandler(api: OpenClawApi): HttpHandler {
   const log = api.logger;
 
   if (!gatewayToken) {
-    log?.warn?.("recall-telemetry: no gateway auth token found in config");
+    throw new Error("recall-telemetry: gateway auth token is required but not configured");
   }
+
+  const rateLimiter = new RateLimiter({ maxRequests: 120, windowMs: 60_000 });
 
   return async (req, res) => {
     if (req.method !== "POST") {
@@ -365,20 +387,28 @@ export function createTelemetryHandler(api: OpenClawApi): HttpHandler {
       return;
     }
 
-    if (gatewayToken) {
-      const auth = verifyAuth(req, gatewayToken);
-      if (!auth.valid) {
-        log?.debug?.(`recall-telemetry: auth failed: ${auth.error}`);
-        sendError(res, 401, "UNAUTHORIZED", auth.error!);
-        return;
-      }
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+    if (!rateLimiter.isAllowed(clientIp)) {
+      sendError(res, 429, "RATE_LIMITED", "Too many requests");
+      return;
+    }
+
+    const auth = verifyAuth(req, gatewayToken);
+    if (!auth.valid) {
+      log?.debug?.(`recall-telemetry: auth failed: ${auth.error}`);
+      sendError(res, 401, "UNAUTHORIZED", auth.error!);
+      return;
     }
 
     let body: TelemetryBody;
     try {
       const raw = await readBody(req);
       body = JSON.parse(raw) as TelemetryBody;
-    } catch {
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendError(res, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds maximum allowed size");
+        return;
+      }
       sendError(res, 400, "BAD_REQUEST", "Invalid JSON body");
       return;
     }
