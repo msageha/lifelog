@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>lifelog</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="panel">
+      <header class="header-bar">
+        <div class="header-left">
+          <p class="eyebrow">lifelog</p>
+          <span id="healthDot" class="conn-dot conn-unknown"></span>
+        </div>
+        <div class="header-right">
+          <label class="master-toggle" for="enabledToggle">
+            <input id="enabledToggle" type="checkbox">
+          </label>
+          <button id="gearButton" class="icon-btn" type="button" title="Settings">&#x2699;</button>
+        </div>
+      </header>
+
+      <nav class="tab-bar">
+        <button class="tab active" data-tab="activity">Activity</button>
+        <button class="tab" data-tab="rules">Rules</button>
+      </nav>
+
+      <!-- Activity tab -->
+      <div class="tab-content" id="tab-activity">
+        <div class="status-bar">
+          <span id="queueCount" class="status-chip">0 queued</span>
+          <span id="statusMessage" class="status-msg"></span>
+        </div>
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Page</th>
+              <th class="col-dwell">Dwell</th>
+              <th class="col-outcome">Outcome</th>
+            </tr>
+          </thead>
+          <tbody id="recentEntries"></tbody>
+        </table>
+      </div>
+
+      <!-- Rules tab -->
+      <div class="tab-content hidden" id="tab-rules">
+        <p class="rules-hint">First match wins. Drag to reorder.</p>
+        <div id="rulesList"></div>
+        <div class="rule-add-bar">
+          <input id="rulePatternInput" type="text" placeholder="domain or path pattern" spellcheck="false">
+          <button id="addRuleButton" type="button">+ Add</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Settings drawer -->
+    <div id="settingsDrawer" class="drawer hidden">
+      <div class="drawer-backdrop"></div>
+      <div class="drawer-panel">
+        <div class="drawer-header">
+          <h2>Settings</h2>
+          <button id="closeDrawerButton" class="icon-btn" type="button">&#x2715;</button>
+        </div>
+        <div class="drawer-body">
+          <section class="drawer-section">
+            <h3>Connection</h3>
+            <label class="field">
+              <span>Server URL</span>
+              <input id="serverUrlInput" type="url" placeholder="http://localhost:18789">
+            </label>
+            <label class="field">
+              <span>Bearer Token</span>
+              <input id="tokenInput" type="password" placeholder="gateway auth token">
+            </label>
+            <div class="button-row">
+              <button id="saveButton" type="button">Save</button>
+              <button id="testButton" class="ghost-button" type="button">Test</button>
+              <button id="scanQrButton" class="ghost-button" type="button">QR</button>
+            </div>
+          </section>
+          <section class="drawer-section">
+            <h3>Defaults</h3>
+            <label class="field">
+              <span>Min dwell time</span>
+              <div class="slider-row">
+                <input id="dwellSlider" type="range" min="5" max="300" step="5">
+                <strong id="dwellValue">15s</strong>
+              </div>
+            </label>
+            <label class="field">
+              <span>Min content chars</span>
+              <div class="slider-row">
+                <input id="minContentSlider" type="range" min="0" max="1000" step="50">
+                <strong id="minContentValue">200</strong>
+              </div>
+            </label>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- QR overlay -->
+    <section id="qrOverlay" class="qr-overlay hidden" aria-hidden="true">
+      <div class="qr-shell">
+        <div class="qr-head">
+          <h2>Scan QR</h2>
+          <button id="closeQrButton" class="ghost-button" type="button">Close</button>
+        </div>
+        <video id="qrVideo" autoplay playsinline muted></video>
+        <p id="qrMessage" class="qr-message">Point the camera at a connection QR code.</p>
+      </div>
+    </section>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

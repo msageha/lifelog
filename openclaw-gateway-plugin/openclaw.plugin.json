@@ -1,0 +1,10 @@
+{
+  "id": "lifelog-gateway",
+  "name": "Lifelog Gateway",
+  "description": "REST endpoints for lifelog telemetry, web history, and voice transcript ingestion",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
