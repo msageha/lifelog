@@ -66,6 +66,12 @@ actor ChunkUploader {
         while attempt < maxAttempts {
             do {
                 try await uploadChunk(fileURL: fileURL, metadata: metadata)
+                let uploaded = SharedDefaults.integer(for: .uploadedChunkCount) + 1
+                SharedDefaults.set(uploaded, for: .uploadedChunkCount)
+                SharedDefaults.set(Date(), for: .lastUploadDate)
+                let pending = max(0, SharedDefaults.integer(for: .pendingChunkCount) - 1)
+                SharedDefaults.set(pending, for: .pendingChunkCount)
+                logger.info("Upload stats updated: uploaded=\(uploaded), pending=\(pending)")
                 return
             } catch {
                 attempt += 1
