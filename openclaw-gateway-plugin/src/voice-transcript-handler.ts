@@ -11,6 +11,7 @@ const MAX_SEGMENTS = 20;
 const MIN_FIRE_CHARS = 50;
 const BUFFER_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const DEDUP_TTL_MS = 60 * 1000; // 60s dedup window
+const MAX_BUFFER_SIZE = 50;
 
 const _sentIds = new Map<string, number>();
 function isDuplicate(key: string): boolean {
@@ -52,6 +53,9 @@ const recentTranscripts: BufferEntry[] = [];
 function trimBuffer(): void {
   const cutoff = Date.now() - BUFFER_TTL_MS;
   while (recentTranscripts.length > 0 && recentTranscripts[0].timestamp < cutoff) {
+    recentTranscripts.shift();
+  }
+  while (recentTranscripts.length > MAX_BUFFER_SIZE) {
     recentTranscripts.shift();
   }
 }
