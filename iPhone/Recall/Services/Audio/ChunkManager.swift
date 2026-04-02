@@ -108,7 +108,9 @@ actor ChunkManager {
             do {
                 let url = try await opusEncoder.encode(samples: samples, startedAt: chunkStart)
                 try await storageManager.enforceStorageCap()
-                logger.info("Chunk saved: \(String(format: "%.1f", duration))s → \(url.lastPathComponent)")
+                let pending = SharedDefaults.integer(for: .pendingChunkCount) + 1
+                SharedDefaults.set(pending, for: .pendingChunkCount)
+                logger.info("Chunk saved: \(String(format: "%.1f", duration))s → \(url.lastPathComponent), pending=\(pending)")
             } catch {
                 logger.error("Failed to encode/save chunk: \(error.localizedDescription)")
             }
