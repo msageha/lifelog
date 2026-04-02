@@ -2,8 +2,11 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { OpenClawApi, HttpHandler, OpenClawLogger, OpenClawRuntime } from "./types.js";
+import { verifyAuth } from "./auth.js";
+import { RateLimiter } from "./rate-limiter.js";
 import { getReactionSettings, type ReactionSettings } from "./recall-settings.js";
-import { readBody, sendError, sendJson } from "./http.js";
+import { readBody, sendError, sendJson, PayloadTooLargeError } from "./http.js";
+import { FileWriteQueue } from "./file-write-queue.js";
 
 const MEMORY_ROOT = join(homedir(), ".openclaw", "workspace", "memory");
 const STATE_PATH = join(MEMORY_ROOT, "voice-transcript-state.json");
@@ -11,6 +14,8 @@ const MAX_SEGMENTS = 20;
 const MIN_FIRE_CHARS = 50;
 const BUFFER_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const DEDUP_TTL_MS = 60 * 1000; // 60s dedup window
+
+const fileWriteQueue = new FileWriteQueue();
 
 const _sentIds = new Map<string, number>();
 function isDuplicate(key: string): boolean {
@@ -133,8 +138,10 @@ async function appendDiaryEntry(data: TranscriptData, log: OpenClawLogger | unde
 
   const diaryPath = join(MEMORY_ROOT, `${dateStr}.md`);
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.appendFile(diaryPath, `${header}${body}`, "utf-8");
+    await fileWriteQueue.enqueue(diaryPath, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.appendFile(diaryPath, `${header}${body}`, { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`voice-transcript: failed to append diary: ${(err as Error).message}`);
   }
@@ -151,8 +158,10 @@ async function persistState(data: TranscriptData, log: OpenClawLogger | undefine
     source: "voice-transcript",
   };
   try {
-    await fs.mkdir(MEMORY_ROOT, { recursive: true });
-    await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+    await fileWriteQueue.enqueue(STATE_PATH, async () => {
+      await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+      await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
+    });
   } catch (err) {
     log?.warn?.(`voice-transcript: failed to persist state: ${(err as Error).message}`);
   }
@@ -199,8 +208,15 @@ function buildEventText(data: TranscriptData, settings: ReactionSettings): strin
 }
 
 export function createVoiceTranscriptHandler(api: OpenClawApi): HttpHandler {
+  const gatewayToken = api.config?.gateway?.auth?.token;
   const log = api.logger;
   const runtime = api.runtime;
+
+  if (!gatewayToken) {
+    throw new Error("voice-transcript: gateway auth token is required but not configured");
+  }
+
+  const rateLimiter = new RateLimiter({ maxRequests: 60, windowMs: 60_000 });
 
   if (!runtime?.subagent?.run) {
     log?.warn?.("voice-transcript: runtime.subagent.run NOT available");
@@ -258,11 +274,28 @@ export function createVoiceTranscriptHandler(api: OpenClawApi): HttpHandler {
       return;
     }
 
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+    if (!rateLimiter.isAllowed(clientIp)) {
+      sendError(res, 429, "RATE_LIMITED", "Too many requests");
+      return;
+    }
+
+    const auth = verifyAuth(req, gatewayToken);
+    if (!auth.valid) {
+      log?.debug?.(`voice-transcript: auth failed: ${auth.error}`);
+      sendError(res, 401, "UNAUTHORIZED", auth.error!);
+      return;
+    }
+
     let body: TranscriptData;
     try {
       const raw = await readBody(req);
       body = JSON.parse(raw) as TranscriptData;
-    } catch {
+    } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        sendError(res, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds maximum allowed size");
+        return;
+      }
       sendError(res, 400, "BAD_REQUEST", "Invalid JSON body");
       return;
     }

@@ -1,19 +1,30 @@
 import type { OpenClawApi, HttpHandler } from "./types.js";
 import { verifyAuth } from "./auth.js";
+import { RateLimiter } from "./rate-limiter.js";
 import { getReactionSettings, saveReactionSettings } from "./recall-settings.js";
-import { readBody, sendError, sendJson } from "./http.js";
+import { readBody, sendError, sendJson, PayloadTooLargeError } from "./http.js";
 
 export function createSettingsHandler(api: OpenClawApi): HttpHandler {
   const gatewayToken = api.config?.gateway?.auth?.token;
   const log = api.logger;
 
+  if (!gatewayToken) {
+    throw new Error("recall-settings: gateway auth token is required but not configured");
+  }
+
+  const rateLimiter = new RateLimiter({ maxRequests: 60, windowMs: 60_000 });
+
   return async (req, res) => {
-    if (gatewayToken) {
-      const auth = verifyAuth(req, gatewayToken);
-      if (!auth.valid) {
-        sendError(res, 401, "UNAUTHORIZED", auth.error!);
-        return;
-      }
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+    if (!rateLimiter.isAllowed(clientIp)) {
+      sendError(res, 429, "RATE_LIMITED", "Too many requests");
+      return;
+    }
+
+    const auth = verifyAuth(req, gatewayToken);
+    if (!auth.valid) {
+      sendError(res, 401, "UNAUTHORIZED", auth.error!);
+      return;
     }
 
     if (req.method === "GET") {
@@ -27,7 +38,11 @@ export function createSettingsHandler(api: OpenClawApi): HttpHandler {
       try {
         const raw = await readBody(req);
         body = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
+      } catch (err) {
+        if (err instanceof PayloadTooLargeError) {
+          sendError(res, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds maximum allowed size");
+          return;
+        }
         sendError(res, 400, "BAD_REQUEST", "Invalid JSON body");
         return;
       }

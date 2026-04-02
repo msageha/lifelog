@@ -57,7 +57,7 @@ export async function saveReactionSettings(
     updatedAt: new Date().toISOString(),
   };
   const dir = join(homedir(), ".openclaw", "workspace", "memory");
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2), "utf-8");
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2), { encoding: "utf-8", mode: 0o600 });
   return merged;
 }
