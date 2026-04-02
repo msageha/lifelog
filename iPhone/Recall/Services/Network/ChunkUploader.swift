@@ -1,12 +1,25 @@
 import Foundation
 import OSLog
+import SwiftData
+import UIKit
 
 private let logger = Logger(subsystem: "com.recall", category: "UPLOAD")
+
+enum ChunkUploaderError: Error {
+    case noServerURL
+    case noAuthToken
+    case serverError(statusCode: Int)
+}
 
 actor ChunkUploader {
     private var isProcessing = false
     private let retryInterval: TimeInterval = Constants.Upload.retryInterval
     private var processingTask: Task<Void, Never>?
+    private let modelContainer: ModelContainer
+
+    init(modelContainer: ModelContainer) {
+        self.modelContainer = modelContainer
+    }
 
     func startProcessing() {
         guard !isProcessing else { return }
@@ -15,8 +28,45 @@ actor ChunkUploader {
 
         processingTask = Task {
             while !Task.isCancelled && isProcessing {
+                await processPendingChunks()
                 try? await Task.sleep(for: .seconds(retryInterval))
             }
+        }
+    }
+
+    @MainActor
+    private func fetchPendingChunks() throws -> [(id: UUID, filePath: String, startedAt: Date)] {
+        let context = modelContainer.mainContext
+        let pendingState = UploadState.pending.rawValue
+        let failedState = UploadState.failed.rawValue
+        var descriptor = FetchDescriptor<AudioChunk>(
+            predicate: #Predicate { $0.uploadState == pendingState || $0.uploadState == failedState },
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        descriptor.fetchLimit = 10
+        let chunks = try context.fetch(descriptor)
+        return chunks.map { (id: $0.id, filePath: $0.filePath, startedAt: $0.startedAt) }
+    }
+
+    private func processPendingChunks() async {
+        do {
+            let pendingChunks = try await fetchPendingChunks()
+            guard !pendingChunks.isEmpty else { return }
+
+            logger.info("Processing \(pendingChunks.count) pending chunks")
+
+            for chunk in pendingChunks {
+                guard !Task.isCancelled && isProcessing else { break }
+                let fileURL = URL(fileURLWithPath: chunk.filePath)
+                let metadata = ChunkMetadata(
+                    deviceId: UIDevice.current.identifierForVendor?.uuidString ?? "unknown",
+                    startedAt: chunk.startedAt,
+                    timezone: TimeZone.current.identifier
+                )
+                await uploadWithRetry(fileURL: fileURL, metadata: metadata, chunkId: chunk.id)
+            }
+        } catch {
+            logger.error("Failed to fetch pending chunks: \(error.localizedDescription)")
         }
     }
 
@@ -29,15 +79,27 @@ actor ChunkUploader {
 
     func uploadChunk(fileURL: URL, metadata: ChunkMetadata) async throws {
         let boundary = "Boundary-\(UUID().uuidString)"
-        let endpoint = Constants.Network.ingestEndpoint
+
+        guard let baseURLString = SharedDefaults.string(for: .uploadServerURL),
+              let baseURL = URL(string: baseURLString) else {
+            throw ChunkUploaderError.noServerURL
+        }
+
+        guard let token = KeychainHelper.load(key: "bearerToken"),
+              !token.isEmpty else {
+            throw ChunkUploaderError.noAuthToken
+        }
+
+        let url = baseURL.appendingPathComponent(Constants.Network.ingestEndpoint)
 
         // Build the request
-        var request = URLRequest(url: URL(string: endpoint)!)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(
             "multipart/form-data; boundary=\(boundary)",
             forHTTPHeaderField: "Content-Type"
         )
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         // Assemble multipart body
         let body = try buildMultipartBody(
@@ -61,7 +123,7 @@ actor ChunkUploader {
 
     // MARK: - Retry
 
-    func uploadWithRetry(fileURL: URL, metadata: ChunkMetadata, maxAttempts: Int = 5) async {
+    func uploadWithRetry(fileURL: URL, metadata: ChunkMetadata, chunkId: UUID? = nil, maxAttempts: Int = 5) async {
         var attempt = 0
         while attempt < maxAttempts {
             do {
@@ -71,6 +133,9 @@ actor ChunkUploader {
                 SharedDefaults.set(Date(), for: .lastUploadDate)
                 let pending = max(0, SharedDefaults.integer(for: .pendingChunkCount) - 1)
                 SharedDefaults.set(pending, for: .pendingChunkCount)
+                if let chunkId {
+                    await updateChunkState(chunkId: chunkId, state: .uploaded)
+                }
                 logger.info("Upload stats updated: uploaded=\(uploaded), pending=\(pending)")
                 return
             } catch {
@@ -81,7 +146,23 @@ actor ChunkUploader {
                 try? await Task.sleep(for: .seconds(cappedDelay))
             }
         }
+        if let chunkId {
+            await updateChunkState(chunkId: chunkId, state: .failed)
+        }
         logger.error("Upload permanently failed after \(maxAttempts) attempts: \(fileURL.lastPathComponent)")
+    }
+
+    @MainActor
+    private func updateChunkState(chunkId: UUID, state: UploadState) {
+        let context = modelContainer.mainContext
+        var descriptor = FetchDescriptor<AudioChunk>(
+            predicate: #Predicate { $0.id == chunkId }
+        )
+        descriptor.fetchLimit = 1
+        if let chunk = try? context.fetch(descriptor).first {
+            chunk.state = state
+            try? context.save()
+        }
     }
 
     // MARK: - Multipart Builder

@@ -1,8 +1,12 @@
 import Foundation
 import SwiftData
 
+enum ModelContainerError: Error {
+    case creationFailed(underlying: Error)
+}
+
 enum ModelContainerSetup {
-    static func create() -> ModelContainer {
+    static func create() throws -> ModelContainer {
         let schema = Schema([
             AudioChunk.self,
             TelemetrySample.self,
@@ -18,7 +22,7 @@ enum ModelContainerSetup {
         do {
             return try ModelContainer(for: schema, configurations: [configuration])
         } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
+            throw ModelContainerError.creationFailed(underlying: error)
         }
     }
 }
