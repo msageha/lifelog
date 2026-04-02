@@ -497,10 +497,29 @@ window.addEventListener("unload", stopQrScan);
 // --- Init ---
 
 // Live-update Activity when background writes new entries
-chrome.storage.onChanged.addListener((changes, area) => {
+chrome.storage.onChanged.addListener(async (changes, area) => {
   if (area === "local" && changes["lifelogRecentEntries"]) {
-    const entries = changes["lifelogRecentEntries"].newValue || [];
-    renderActivity(entries);
+    const raw = changes["lifelogRecentEntries"].newValue;
+    if (!raw) {
+      renderActivity([]);
+      return;
+    }
+    // Encrypted data is an object with {iv, ciphertext}; plain data is an array
+    if (Array.isArray(raw)) {
+      renderActivity(raw);
+    } else if (raw.iv && raw.ciphertext) {
+      try {
+        const { getOrCreateKey, decrypt } = await import("../lib/crypto.js");
+        const key = await getOrCreateKey();
+        const json = await decrypt(key, raw);
+        renderActivity(JSON.parse(json));
+      } catch (err) {
+        console.warn("[lifelog] recentEntries decryption failed in onChanged:", err);
+        renderActivity([]);
+      }
+    } else {
+      renderActivity([]);
+    }
   }
 });
 
