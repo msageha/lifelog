@@ -1,9 +1,27 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+const MAX_BODY_BYTES = 1_048_576; // 1 MB
+
+export class PayloadTooLargeError extends Error {
+  constructor() {
+    super("Request body exceeds 1 MB limit");
+    this.name = "PayloadTooLargeError";
+  }
+}
+
 export function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let totalBytes = 0;
+    req.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        req.destroy();
+        reject(new PayloadTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
     req.on("error", reject);
   });
