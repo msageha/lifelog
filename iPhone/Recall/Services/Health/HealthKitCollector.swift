@@ -28,7 +28,7 @@ actor HealthKitCollector {
     }
 }
 
-struct HealthSnapshotDTO: Sendable {
+struct HealthSnapshotDTO: Codable, Sendable {
     var steps: Int = 0
     var activeEnergyKcal: Double = 0
     var walkingDistanceMeters: Double = 0
