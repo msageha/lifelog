@@ -1,0 +1,134 @@
+name: Recall
+
+options:
+  bundleIdPrefix: com.recall
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "26"
+  defaultConfig: Debug
+  groupSortPosition: top
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6"
+    SWIFT_STRICT_CONCURRENCY: complete
+    TARGETED_DEVICE_FAMILY: 1
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    DEVELOPMENT_TEAM: ""
+
+configs:
+  Debug: debug
+  Release: release
+
+targets:
+  Recall:
+    type: application
+    platform: iOS
+    sources:
+      - path: Recall
+        excludes:
+          - "Preview Content"
+      - path: Shared
+      - path: RecallIntents
+        excludes:
+          - "Info.plist"
+    resources:
+      - path: Recall/Resources
+      - path: Recall/Preview Content
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recall.app
+        INFOPLIST_FILE: Recall/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Recall/Resources/Recall.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    entitlements:
+      path: Recall/Resources/Recall.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.recall.shared
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.background-delivery: true
+    info:
+      path: Recall/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Recall
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIBackgroundModes:
+          - audio
+          - location
+          - fetch
+          - processing
+        NSMicrophoneUsageDescription: "音声の継続録音にマイクを使用します"
+        NSLocationAlwaysAndWhenInUseUsageDescription: "バックグラウンドでの位置情報追跡に使用します"
+        NSLocationWhenInUseUsageDescription: "位置情報の記録に使用します"
+        NSHealthShareUsageDescription: "歩数・心拍数・睡眠などのヘルスデータを記録します"
+        NSMotionUsageDescription: "歩行・走行・移動手段などのアクティビティを検出します"
+        NSCameraUsageDescription: "QRコードスキャンによるサーバー設定に使用します"
+        NSLocalNetworkUsageDescription: "Recallサーバーへの接続に使用します"
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            ts.net:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+    dependencies:
+      - target: RecallWidgetControl
+      - target: RecallWidgetLive
+
+  RecallWidgetControl:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: RecallWidgetControl
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recall.app.widget-control
+        INFOPLIST_FILE: RecallWidgetControl/Info.plist
+        CODE_SIGN_ENTITLEMENTS: RecallWidgetControl/RecallWidgetControl.entitlements
+    entitlements:
+      path: RecallWidgetControl/RecallWidgetControl.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.recall.shared
+    info:
+      path: RecallWidgetControl/Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  RecallWidgetLive:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: RecallWidgetLive
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recall.app.widget-live
+        INFOPLIST_FILE: RecallWidgetLive/Info.plist
+        CODE_SIGN_ENTITLEMENTS: RecallWidgetLive/RecallWidgetLive.entitlements
+    entitlements:
+      path: RecallWidgetLive/RecallWidgetLive.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.recall.shared
+    info:
+      path: RecallWidgetLive/Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  RecallTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/RecallTests
+    dependencies:
+      - target: Recall
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recall.tests
