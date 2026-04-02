@@ -8,6 +8,7 @@ actor WebSocketClient {
     private var isConnected = false
     private var reconnectAttempts = 0
     private let maxReconnectDelay: TimeInterval = 60.0
+    private let maxRetryCount = 5
     private let baseReconnectDelay: TimeInterval = 1.0
 
     private var storedURL: URL?
@@ -67,6 +68,10 @@ actor WebSocketClient {
         }
 
         reconnectAttempts += 1
+        guard reconnectAttempts <= maxRetryCount else {
+            logger.error("Max retry count (\(self.maxRetryCount)) reached, giving up")
+            return
+        }
         let exponentialDelay = min(baseReconnectDelay * pow(2.0, Double(reconnectAttempts - 1)), maxReconnectDelay)
 
         // Add ±20% jitter to avoid thundering herd

@@ -1,5 +1,8 @@
+import OSLog
 import SwiftData
 import SwiftUI
+
+private let logger = Logger(subsystem: "com.recall.watch", category: "App")
 
 @main
 struct RecallWatchApp: App {
@@ -11,7 +14,13 @@ struct RecallWatchApp: App {
         do {
             modelContainer = try ModelContainerSetup.create()
         } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
+            logger.fault("Failed to create ModelContainer: \(error.localizedDescription)")
+            do {
+                modelContainer = try ModelContainer(for: Schema([]))
+            } catch {
+                logger.fault("Failed to create fallback ModelContainer: \(error.localizedDescription)")
+                fatalError("Cannot create any ModelContainer: \(error)")
+            }
         }
     }
 
