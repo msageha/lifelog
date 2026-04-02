@@ -88,8 +88,8 @@ async function writeSeenIds(): Promise<void> {
     entries,
   };
 
-  await fs.mkdir(MEMORY_ROOT, { recursive: true });
-  await fs.writeFile(SEEN_IDS_PATH, JSON.stringify(payload, null, 2), "utf-8");
+  await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
+  await fs.writeFile(SEEN_IDS_PATH, JSON.stringify(payload, null, 2), { encoding: "utf-8", mode: 0o600 });
 }
 
 export function flushSeenIds(): Promise<void> {
