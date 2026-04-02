@@ -8,6 +8,8 @@ enum SharedDefaultsKey: String, Sendable {
     case isMotionEnabled = "isMotionEnabled"
     case wifiOnlyUpload = "wifiOnlyUpload"
     case pendingChunkCount = "pendingChunkCount"
+    case uploadedChunkCount = "uploadedChunkCount"
+    case lastUploadDate = "lastUploadDate"
     case lastLocationTimestamp = "lastLocationTimestamp"
 }
 
@@ -47,6 +49,14 @@ struct SharedDefaults: Sendable {
     }
 
     static func set(_ value: Double, for key: SharedDefaultsKey) {
+        store.set(value, forKey: key.rawValue)
+    }
+
+    static func date(for key: SharedDefaultsKey) -> Date? {
+        store.object(forKey: key.rawValue) as? Date
+    }
+
+    static func set(_ value: Date, for key: SharedDefaultsKey) {
         store.set(value, forKey: key.rawValue)
     }
 
