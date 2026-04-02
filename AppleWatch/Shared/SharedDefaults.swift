@@ -7,6 +7,8 @@ enum SharedDefaultsKey: String, Sendable {
     case isHealthEnabled = "isHealthEnabled"
     case isMotionEnabled = "isMotionEnabled"
     case wifiOnlyUpload = "wifiOnlyUpload"
+    case pendingChunkCount = "pendingChunkCount"
+    case lastLocationTimestamp = "lastLocationTimestamp"
 }
 
 struct SharedDefaults: Sendable {
@@ -29,6 +31,22 @@ struct SharedDefaults: Sendable {
     }
 
     static func set(_ value: String, for key: SharedDefaultsKey) {
+        store.set(value, forKey: key.rawValue)
+    }
+
+    static func integer(for key: SharedDefaultsKey) -> Int {
+        store.integer(forKey: key.rawValue)
+    }
+
+    static func set(_ value: Int, for key: SharedDefaultsKey) {
+        store.set(value, forKey: key.rawValue)
+    }
+
+    static func double(for key: SharedDefaultsKey) -> Double {
+        store.double(forKey: key.rawValue)
+    }
+
+    static func set(_ value: Double, for key: SharedDefaultsKey) {
         store.set(value, forKey: key.rawValue)
     }
 

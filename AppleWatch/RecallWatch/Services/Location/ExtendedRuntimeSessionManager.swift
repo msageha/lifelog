@@ -48,6 +48,28 @@ final class ExtendedRuntimeSessionManager: NSObject, WKExtendedRuntimeSessionDel
         _ extendedRuntimeSession: WKExtendedRuntimeSession
     ) {
         logger.warning("Extended runtime session will expire soon")
-        // TODO: Save state and prepare for suspension
+        saveStateBeforeExpiration()
+    }
+
+    private nonisolated func saveStateBeforeExpiration() {
+        let recordingState = SharedDefaults.recordingState
+        SharedDefaults.set(recordingState.rawValue, for: .recordingState)
+
+        let pendingChunks = SharedDefaults.integer(for: .pendingChunkCount)
+        SharedDefaults.set(pendingChunks, for: .pendingChunkCount)
+
+        let now = Date().timeIntervalSince1970
+        SharedDefaults.set(now, for: .lastLocationTimestamp)
+
+        SharedDefaults.store.synchronize()
+        logger.info("State saved before expiration: recording=\(recordingState.rawValue), pendingChunks=\(pendingChunks), locationTimestamp=\(now)")
+    }
+
+    nonisolated func restoreStateAfterResume() {
+        let recordingState = SharedDefaults.recordingState
+        let pendingChunks = SharedDefaults.integer(for: .pendingChunkCount)
+        let lastLocationTs = SharedDefaults.double(for: .lastLocationTimestamp)
+
+        logger.info("State restored: recording=\(recordingState.rawValue), pendingChunks=\(pendingChunks), lastLocation=\(lastLocationTs)")
     }
 }
