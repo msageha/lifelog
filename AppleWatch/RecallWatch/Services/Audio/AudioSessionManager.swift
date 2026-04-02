@@ -49,10 +49,17 @@ enum AudioSessionManager {
         switch type {
         case .began:
             logger.info("Audio interruption began")
-            // TODO: Pause recording
+            NotificationCenter.default.post(name: .audioInterruptionBegan, object: nil)
         case .ended:
             logger.info("Audio interruption ended")
-            // TODO: Resume recording
+            let shouldResume = (info[AVAudioSessionInterruptionOptionKey] as? UInt)
+                .flatMap { AVAudioSession.InterruptionOptions(rawValue: $0) }
+                .map { $0.contains(.shouldResume) } ?? false
+            NotificationCenter.default.post(
+                name: .audioInterruptionEnded,
+                object: nil,
+                userInfo: ["shouldResume": shouldResume]
+            )
         @unknown default:
             break
         }
@@ -63,6 +70,18 @@ enum AudioSessionManager {
               let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
 
-        logger.info("Audio route changed: \(reason.rawValue)")
+        let currentRoute = AVAudioSession.sharedInstance().currentRoute
+        let outputs = currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ", ")
+        logger.info("Audio route changed: reason=\(reason.rawValue) outputs=[\(outputs)]")
+
+        if reason == .oldDeviceUnavailable {
+            NotificationCenter.default.post(name: .audioRouteDeviceLost, object: nil)
+        }
     }
+}
+
+extension Notification.Name {
+    static let audioInterruptionBegan = Notification.Name("audioInterruptionBegan")
+    static let audioInterruptionEnded = Notification.Name("audioInterruptionEnded")
+    static let audioRouteDeviceLost = Notification.Name("audioRouteDeviceLost")
 }
