@@ -5,6 +5,11 @@ import OSLog
 private let logger = Logger(subsystem: "com.recall", category: "AudioSession")
 
 enum AudioSessionManager {
+    /// Callback invoked on interruption begin/end. `true` = began, `false` = ended.
+    static var onInterruption: ((Bool) -> Void)?
+    /// Callback invoked when audio route changes (e.g. headphone/Bluetooth disconnect).
+    static var onRouteChange: ((AVAudioSession.RouteChangeReason) -> Void)?
+
     static func configure() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(
@@ -54,17 +59,18 @@ enum AudioSessionManager {
         switch type {
         case .began:
             logger.info("Audio interruption began")
-            NotificationCenter.default.post(name: .audioInterruptionBegan, object: nil)
+            onInterruption?(true)
         case .ended:
             logger.info("Audio interruption ended")
-            let shouldResume = (info[AVAudioSessionInterruptionOptionKey] as? UInt)
-                .flatMap { AVAudioSession.InterruptionOptions(rawValue: $0) }
-                .map { $0.contains(.shouldResume) } ?? false
-            NotificationCenter.default.post(
-                name: .audioInterruptionEnded,
-                object: nil,
-                userInfo: ["shouldResume": shouldResume]
-            )
+            if let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) {
+                    logger.info("Interruption ended with shouldResume flag")
+                    onInterruption?(false)
+                }
+            } else {
+                onInterruption?(false)
+            }
         @unknown default:
             break
         }
@@ -75,18 +81,16 @@ enum AudioSessionManager {
               let reasonValue = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else { return }
 
-        let currentRoute = AVAudioSession.sharedInstance().currentRoute
-        let outputs = currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ", ")
-        logger.info("Audio route changed: reason=\(reason.rawValue) outputs=[\(outputs)]")
+        logger.info("Audio route changed: \(reason.rawValue)")
+        onRouteChange?(reason)
 
-        if reason == .oldDeviceUnavailable {
-            NotificationCenter.default.post(name: .audioRouteDeviceLost, object: nil)
+        switch reason {
+        case .oldDeviceUnavailable:
+            logger.info("Audio device disconnected (headphones/Bluetooth removed)")
+        case .newDeviceAvailable:
+            logger.info("New audio device connected")
+        default:
+            break
         }
     }
-}
-
-extension Notification.Name {
-    static let audioInterruptionBegan = Notification.Name("audioInterruptionBegan")
-    static let audioInterruptionEnded = Notification.Name("audioInterruptionEnded")
-    static let audioRouteDeviceLost = Notification.Name("audioRouteDeviceLost")
 }

@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 import SwiftData
 
-private let logger = Logger(subsystem: "com.recall", category: "UploadVM")
+private let logger = Logger(subsystem: "com.recall", category: "UploadViewModel")
 
 @Observable
 @MainActor
@@ -28,9 +28,9 @@ final class UploadViewModel {
     }
 
     func startProcessing() {
-        isUploading = true
         Task {
             await chunkUploader.startProcessing()
+            isUploading = true
             logger.info("Upload processing started")
         }
         refreshCounts()

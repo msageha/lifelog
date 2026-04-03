@@ -4,12 +4,22 @@ import SwiftData
 
 private let logger = Logger(subsystem: "com.recall", category: "AgentReceiver")
 
+struct AgentTextPayload: Codable, Sendable {
+    let type: String
+    let text: String?
+    let audioPath: String?
+}
+
 actor AgentMessageReceiver {
-    private let modelContainer: ModelContainer
     private let spatialAudioPlayer: SpatialAudioPlayer
 
-    init(modelContainer: ModelContainer, spatialAudioPlayer: SpatialAudioPlayer) {
-        self.modelContainer = modelContainer
+    private var onMessageReceived: (@Sendable (String, String?) async -> Void)?
+
+    func setOnMessageReceived(_ handler: @escaping @Sendable (String, String?) async -> Void) {
+        onMessageReceived = handler
+    }
+
+    init(spatialAudioPlayer: SpatialAudioPlayer) {
         self.spatialAudioPlayer = spatialAudioPlayer
     }
 
@@ -21,51 +31,47 @@ actor AgentMessageReceiver {
 
         case .data(let data):
             logger.info("Received binary data (\(data.count) bytes)")
-            await handleAudioData(data)
+            await handleBinaryMessage(data)
 
         @unknown default:
-            break
+            logger.warning("Received unknown message type")
         }
     }
 
     private func handleTextMessage(_ text: String) async {
         guard let data = text.data(using: .utf8) else {
-            logger.warning("Failed to encode text message as UTF-8")
+            logger.error("Failed to convert text message to data")
             return
         }
 
         do {
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                logger.warning("Message is not a JSON object")
-                return
+            let payload = try JSONDecoder().decode(AgentTextPayload.self, from: data)
+
+            switch payload.type {
+            case "text":
+                let content = payload.text ?? ""
+                logger.info("Parsed text message: \(content.prefix(50))")
+                await onMessageReceived?(content, nil)
+
+            case "audio":
+                if let audioPath = payload.audioPath {
+                    logger.info("Parsed audio message with path: \(audioPath)")
+                    await onMessageReceived?("", audioPath)
+                }
+
+            default:
+                logger.warning("Unknown message type: \(payload.type)")
             }
-
-            let textContent = json["text"] as? String ?? text
-            await saveMessage(textContent: textContent)
         } catch {
-            logger.error("JSON parse error: \(error)")
-            await saveMessage(textContent: text)
+            logger.error("Failed to parse JSON message: \(error.localizedDescription)")
         }
     }
 
-    @MainActor
-    private func saveMessage(textContent: String) {
-        let context = modelContainer.mainContext
-        let agentMessage = AgentMessage(textContent: textContent)
-        context.insert(agentMessage)
-        do {
-            try context.save()
-            logger.info("Saved agent message to SwiftData")
-        } catch {
-            logger.error("Failed to save agent message: \(error)")
-        }
-    }
-
-    private func handleAudioData(_ data: Data) async {
+    private func handleBinaryMessage(_ data: Data) async {
         do {
             try await spatialAudioPlayer.play(audioData: data)
         } catch {
-            logger.error("Failed to play audio: \(error)")
+            logger.error("Failed to play audio data: \(error.localizedDescription)")
         }
     }
 }

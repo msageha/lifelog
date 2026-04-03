@@ -4,13 +4,20 @@ const MAX_BODY_BYTES = 1_048_576; // 1 MB
 
 export class PayloadTooLargeError extends Error {
   constructor() {
-    super("Request body exceeds 1 MB limit");
+    super("Request body exceeds maximum allowed size");
     this.name = "PayloadTooLargeError";
   }
 }
 
 export function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
+    const contentLength = req.headers["content-length"];
+    if (contentLength && parseInt(contentLength, 10) > MAX_BODY_BYTES) {
+      req.destroy();
+      reject(new PayloadTooLargeError());
+      return;
+    }
+
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     req.on("data", (chunk: Buffer) => {

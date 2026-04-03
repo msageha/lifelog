@@ -6,8 +6,8 @@ private let logger = Logger(subsystem: "com.recall", category: "LocationTracker"
 
 actor LocationTracker {
     private var locationManager: CLLocationManager?
-    private var lastSentTime: Date?
     private var delegate: LocationDelegate?
+    private var lastSentTime: Date?
 
     var onLocationUpdate: (@Sendable (CLLocation) -> Void)?
 
@@ -15,25 +15,20 @@ actor LocationTracker {
         let manager = CLLocationManager()
         let locationDelegate = LocationDelegate { [weak self] location in
             guard let self else { return }
-            Task { await self.handleLocation(location) }
+            await self.handleLocation(location)
         }
 
         manager.delegate = locationDelegate
-        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-        manager.distanceFilter = Constants.Location.accuracyThreshold
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        manager.distanceFilter = 10
         manager.allowsBackgroundLocationUpdates = true
         manager.pausesLocationUpdatesAutomatically = false
+        manager.showsBackgroundLocationIndicator = true
+        manager.requestAlwaysAuthorization()
+        manager.startUpdatingLocation()
 
-        locationManager = manager
-        delegate = locationDelegate
-
-        let status = manager.authorizationStatus
-        if status == .notDetermined {
-            manager.requestAlwaysAuthorization()
-        } else if status == .authorizedAlways || status == .authorizedWhenInUse {
-            manager.startUpdatingLocation()
-        }
-
+        self.locationManager = manager
+        self.delegate = locationDelegate
         logger.info("Location tracker started")
     }
 
@@ -45,55 +40,61 @@ actor LocationTracker {
     }
 
     private func handleLocation(_ location: CLLocation) {
-        // Quality filter: accuracy
         guard location.horizontalAccuracy <= Constants.Location.accuracyThreshold else {
-            logger.debug("Location filtered: accuracy \(location.horizontalAccuracy)m exceeds threshold")
+            logger.debug("Location rejected: accuracy \(location.horizontalAccuracy)m exceeds threshold")
             return
         }
 
-        // Quality filter: staleness
-        let age = Date().timeIntervalSince(location.timestamp)
-        guard age <= Constants.Location.stalenessThreshold else {
-            logger.debug("Location filtered: age \(String(format: "%.0f", age))s exceeds staleness threshold")
+        guard abs(location.timestamp.timeIntervalSinceNow) <= Constants.Location.stalenessThreshold else {
+            logger.debug("Location rejected: stale by \(abs(location.timestamp.timeIntervalSinceNow))s")
             return
         }
 
-        // Minimum send interval
-        if let lastSent = lastSentTime {
-            let interval = Date().timeIntervalSince(lastSent)
-            guard interval >= Constants.Location.minimumSendInterval else { return }
+        if let lastSent = lastSentTime,
+           Date().timeIntervalSince(lastSent) < Constants.Location.minimumSendInterval {
+            return
         }
 
         lastSentTime = Date()
-        onLocationUpdate?(location)
-        logger.info("Location sent: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+        logger.info("Location accepted: \(location.coordinate.latitude), \(location.coordinate.longitude)")
     }
 }
 
 // MARK: - CLLocationManagerDelegate
 
-private final class LocationDelegate: NSObject, CLLocationManagerDelegate, @unchecked Sendable {
-    private let onLocation: @Sendable (CLLocation) -> Void
+private final class LocationDelegate: NSObject, CLLocationManagerDelegate, Sendable {
+    private let onLocation: @Sendable (CLLocation) async -> Void
 
-    init(onLocation: @escaping @Sendable (CLLocation) -> Void) {
+    init(onLocation: @escaping @Sendable (CLLocation) async -> Void) {
         self.onLocation = onLocation
-        super.init()
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
-        onLocation(location)
+        Task {
+            await onLocation(location)
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        logger.error("Location error: \(error)")
+        let logger = Logger(subsystem: "com.recall", category: "LocationTracker")
+        logger.error("Location manager error: \(error.localizedDescription)")
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        let status = manager.authorizationStatus
-        logger.info("Location authorization changed: \(status.rawValue)")
-        if status == .authorizedAlways || status == .authorizedWhenInUse {
-            manager.startUpdatingLocation()
+        let logger = Logger(subsystem: "com.recall", category: "LocationTracker")
+        switch manager.authorizationStatus {
+        case .authorizedAlways:
+            logger.info("Location authorization: always")
+        case .authorizedWhenInUse:
+            logger.warning("Location authorization: when in use only — background tracking limited")
+            manager.requestAlwaysAuthorization()
+        case .denied, .restricted:
+            logger.error("Location authorization denied or restricted")
+        case .notDetermined:
+            logger.info("Location authorization not determined")
+        @unknown default:
+            break
         }
     }
 }

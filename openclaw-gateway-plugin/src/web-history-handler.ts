@@ -4,24 +4,26 @@ import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawApi, HttpHandler, OpenClawLogger, OpenClawRuntime } from "./types.js";
 import { verifyAuth } from "./auth.js";
+import { RateLimiter } from "./rate-limiter.js";
 import { getReactionSettings, type ReactionSettings } from "./recall-settings.js";
 import { flushSeenIds, getRecentEntries, getStats, storeEntry, type WebHistoryEntry } from "./web-history-store.js";
 import { readBody, sendError, sendJson, PayloadTooLargeError } from "./http.js";
-import { RateLimiter } from "./rate-limiter.js";
 import { FileWriteQueue } from "./file-write-queue.js";
 
 const NEXT_MIN_INTERVAL_SEC = 60;
 const PREVIEW_LIMIT = 200;
 const MEMORY_ROOT = join(homedir(), ".openclaw", "workspace", "memory");
-const writeQueue = new FileWriteQueue();
 
 function getClientIp(req: IncomingMessage): string {
   const forwarded = req.headers["x-forwarded-for"];
   if (typeof forwarded === "string") return forwarded.split(",")[0].trim();
   return req.socket.remoteAddress ?? "unknown";
 }
+
 const WEB_HISTORY_STATE_PATH = join(MEMORY_ROOT, "web-history-state.json");
 const DEDUP_TTL_MS = 60 * 1000;
+
+const fileWriteQueue = new FileWriteQueue();
 
 const _sentIds = new Map<string, number>();
 function isDuplicate(key: string): boolean {
@@ -150,7 +152,7 @@ async function appendDiaryEntry(entry: WebHistoryEntry, log: OpenClawLogger | un
   const diaryPath = join(MEMORY_ROOT, `${dateStr}.md`);
 
   try {
-    await writeQueue.enqueue(diaryPath, async () => {
+    await fileWriteQueue.enqueue(diaryPath, async () => {
       await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
       await fs.appendFile(diaryPath, `${header}${body}`, { encoding: "utf-8", mode: 0o600 });
     });
@@ -194,7 +196,7 @@ async function persistLatestState(entry: WebHistoryEntry, log: OpenClawLogger | 
   };
 
   try {
-    await writeQueue.enqueue(WEB_HISTORY_STATE_PATH, async () => {
+    await fileWriteQueue.enqueue(WEB_HISTORY_STATE_PATH, async () => {
       await fs.mkdir(MEMORY_ROOT, { recursive: true, mode: 0o700 });
       await fs.writeFile(WEB_HISTORY_STATE_PATH, JSON.stringify(state, null, 2), { encoding: "utf-8", mode: 0o600 });
     });
@@ -210,7 +212,7 @@ export function createWebHistoryHandler(api: OpenClawApi): HttpHandler {
   }
   const log = api.logger;
   const runtime = api.runtime;
-  const limiter = new RateLimiter({ maxRequests: 120, windowMs: 60_000 });
+  const rateLimiter = new RateLimiter({ maxRequests: 120, windowMs: 60_000 });
 
   if (runtime?.subagent?.run) {
     log?.info?.("recall-web-history: runtime.subagent.run available");
@@ -307,13 +309,14 @@ export function createWebHistoryHandler(api: OpenClawApi): HttpHandler {
     }
 
     const clientIp = getClientIp(req);
-    if (!limiter.isAllowed(clientIp)) {
-      sendError(res, 429, "TOO_MANY_REQUESTS", "Rate limit exceeded");
+    if (!rateLimiter.isAllowed(clientIp)) {
+      sendError(res, 429, "RATE_LIMITED", "Too many requests");
       return;
     }
 
     const auth = verifyAuth(req, gatewayToken);
     if (!auth.valid) {
+      log?.debug?.(`recall-web-history: auth failed: ${auth.error}`);
       sendError(res, 401, "UNAUTHORIZED", auth.error!);
       return;
     }
@@ -324,7 +327,7 @@ export function createWebHistoryHandler(api: OpenClawApi): HttpHandler {
       body = JSON.parse(raw) as { entries?: unknown[] };
     } catch (err) {
       if (err instanceof PayloadTooLargeError) {
-        sendError(res, 413, "PAYLOAD_TOO_LARGE", err.message);
+        sendError(res, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds maximum allowed size");
         return;
       }
       sendError(res, 400, "BAD_REQUEST", "Invalid JSON body");

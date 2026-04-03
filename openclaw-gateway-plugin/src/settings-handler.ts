@@ -1,9 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import type { OpenClawApi, HttpHandler } from "./types.js";
 import { verifyAuth } from "./auth.js";
+import { RateLimiter } from "./rate-limiter.js";
 import { getReactionSettings, saveReactionSettings } from "./recall-settings.js";
 import { readBody, sendError, sendJson, PayloadTooLargeError } from "./http.js";
-import { RateLimiter } from "./rate-limiter.js";
 
 function getClientIp(req: IncomingMessage): string {
   const forwarded = req.headers["x-forwarded-for"];
@@ -17,12 +17,12 @@ export function createSettingsHandler(api: OpenClawApi): HttpHandler {
     throw new Error("recall-settings: gateway auth token is required but not configured");
   }
   const log = api.logger;
-  const limiter = new RateLimiter({ maxRequests: 60, windowMs: 60_000 });
+  const rateLimiter = new RateLimiter({ maxRequests: 60, windowMs: 60_000 });
 
   return async (req, res) => {
     const clientIp = getClientIp(req);
-    if (!limiter.isAllowed(clientIp)) {
-      sendError(res, 429, "TOO_MANY_REQUESTS", "Rate limit exceeded");
+    if (!rateLimiter.isAllowed(clientIp)) {
+      sendError(res, 429, "RATE_LIMITED", "Too many requests");
       return;
     }
 
@@ -45,7 +45,7 @@ export function createSettingsHandler(api: OpenClawApi): HttpHandler {
         body = JSON.parse(raw) as Record<string, unknown>;
       } catch (err) {
         if (err instanceof PayloadTooLargeError) {
-          sendError(res, 413, "PAYLOAD_TOO_LARGE", err.message);
+          sendError(res, 413, "PAYLOAD_TOO_LARGE", "Request body exceeds maximum allowed size");
           return;
         }
         sendError(res, 400, "BAD_REQUEST", "Invalid JSON body");

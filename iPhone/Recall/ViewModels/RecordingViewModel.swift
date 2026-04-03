@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-private let logger = Logger(subsystem: "com.recall", category: "RecordingVM")
+private let logger = Logger(subsystem: "com.recall", category: "RecordingViewModel")
 
 @Observable
 @MainActor
@@ -12,18 +12,22 @@ final class RecordingViewModel {
     var totalChunksRecorded: Int = 0
     var elapsedSeconds: Int = 0
 
-    private let engine: AudioRecordingEngine
+    private var recordingEngine: AudioRecordingEngine?
     private var timerTask: Task<Void, Never>?
 
-    init(engine: AudioRecordingEngine) {
-        self.engine = engine
+    func setEngine(_ engine: AudioRecordingEngine) {
+        self.recordingEngine = engine
     }
 
     func startRecording() {
+        guard let recordingEngine else {
+            logger.error("AudioRecordingEngine not set")
+            return
+        }
         state = .recording
         Task {
             do {
-                try await engine.start()
+                try await recordingEngine.start()
                 logger.info("Recording started")
             } catch {
                 logger.error("Failed to start recording: \(error)")
@@ -34,11 +38,15 @@ final class RecordingViewModel {
     }
 
     func stopRecording() {
-        state = .idle
+        guard let recordingEngine else {
+            logger.error("AudioRecordingEngine not set")
+            return
+        }
         Task {
-            await engine.stop()
+            await recordingEngine.stop()
             logger.info("Recording stopped")
         }
+        state = .idle
         stopTimer()
     }
 

@@ -91,17 +91,18 @@ actor ChunkUploader {
     func uploadChunk(fileURL: URL, metadata: ChunkMetadata) async throws {
         let boundary = "Boundary-\(UUID().uuidString)"
 
+        // Build URL safely from SharedDefaults base URL + ingest path
         guard let baseURLString = SharedDefaults.string(for: .uploadServerURL),
               let baseURL = URL(string: baseURLString) else {
             throw ChunkUploaderError.noServerURL
         }
+        let url = baseURL.appendingPathComponent(Constants.Network.ingestEndpoint)
 
+        // Load bearer token from Keychain
         guard let token = KeychainHelper.load(key: "bearerToken"),
               !token.isEmpty else {
             throw ChunkUploaderError.noAuthToken
         }
-
-        let url = baseURL.appendingPathComponent(Constants.Network.ingestEndpoint)
 
         // Build the request
         var request = URLRequest(url: url)

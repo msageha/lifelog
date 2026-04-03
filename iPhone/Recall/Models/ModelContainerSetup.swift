@@ -6,6 +6,17 @@ enum ModelContainerError: Error {
 }
 
 enum ModelContainerSetup {
+    enum SetupError: Error, LocalizedError {
+        case containerCreationFailed(underlying: Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .containerCreationFailed(let underlying):
+                return "Failed to create ModelContainer: \(underlying.localizedDescription)"
+            }
+        }
+    }
+
     static func create() throws -> ModelContainer {
         let schema = Schema([
             AudioChunk.self,
@@ -22,7 +33,7 @@ enum ModelContainerSetup {
         do {
             return try ModelContainer(for: schema, configurations: [configuration])
         } catch {
-            throw ModelContainerError.creationFailed(underlying: error)
+            throw SetupError.containerCreationFailed(underlying: error)
         }
     }
 }

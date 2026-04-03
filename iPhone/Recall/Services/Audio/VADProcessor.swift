@@ -44,7 +44,7 @@ actor VADProcessor {
             let srArray = try MLMultiArray(shape: [1], dataType: .int32)
             srArray[0] = NSNumber(value: Int32(Constants.Audio.sampleRate))
 
-            let input = try MLDictionaryFeatureProvider(dictionary: [
+            let input = MLDictionaryFeatureProvider(dictionary: [
                 "input": MLFeatureValue(multiArray: inputArray),
                 "sr": MLFeatureValue(multiArray: srArray),
                 "h": MLFeatureValue(multiArray: h),

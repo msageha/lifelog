@@ -5,9 +5,12 @@ private let logger = Logger(subsystem: "com.recall.watch", category: "LaunchSequ
 
 @MainActor
 enum LaunchSequence {
-    private(set) static var extendedRuntimeManager: ExtendedRuntimeSessionManager?
+    private(set) static var extendedRuntimeSessionManager: ExtendedRuntimeSessionManager?
     private(set) static var connectivityMonitor: ConnectivityMonitor?
     private(set) static var telemetryService: TelemetryService?
+    private(set) static var locationTracker: LocationTracker?
+    private(set) static var healthKitCollector: HealthKitCollector?
+    private(set) static var motionActivityDetector: MotionActivityDetector?
 
     static func execute(
         recording: RecordingViewModel,
@@ -21,7 +24,7 @@ enum LaunchSequence {
         logger.info("[1/7] Starting extended runtime session")
         let sessionManager = ExtendedRuntimeSessionManager()
         sessionManager.start()
-        extendedRuntimeManager = sessionManager
+        extendedRuntimeSessionManager = sessionManager
         logger.info("[1/7] Extended runtime session started")
 
         // 2. Enable recording, start AudioRecordingEngine
@@ -54,9 +57,7 @@ enum LaunchSequence {
 
         // 6. Enable telemetry streams, start TelemetryService
         logger.info("[6/7] Starting telemetry")
-        let telemetry = TelemetryService()
-        telemetryService = telemetry
-        await telemetry.start()
+        await startTelemetry(config: config)
         logger.info("[6/7] Telemetry started")
 
         // 7. Start WebSocket connection
@@ -65,5 +66,35 @@ enum LaunchSequence {
         logger.info("[7/7] WebSocket connection initiated")
 
         logger.info("Launch sequence completed")
+    }
+
+    // MARK: - Step 6: Telemetry
+
+    private static func startTelemetry(config: ConfigViewModel) async {
+        let telemetry = TelemetryService()
+        telemetryService = telemetry
+        await telemetry.start()
+
+        if config.isLocationEnabled {
+            let tracker = LocationTracker()
+            locationTracker = tracker
+            await tracker.start()
+        }
+
+        if config.isHealthEnabled {
+            let collector = HealthKitCollector()
+            healthKitCollector = collector
+            do {
+                try await collector.requestAuthorization()
+            } catch {
+                logger.warning("HealthKit authorization failed: \(error.localizedDescription)")
+            }
+        }
+
+        if config.isMotionEnabled {
+            let detector = MotionActivityDetector()
+            motionActivityDetector = detector
+            await detector.start(telemetry: telemetry)
+        }
     }
 }

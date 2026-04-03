@@ -1,11 +1,15 @@
+import AudioToolbox
 import AVFoundation
 import Foundation
 import OSLog
 
 private let logger = Logger(subsystem: "com.recall", category: "SpatialAudio")
 
-enum SpatialAudioPlayerError: Error {
-    case audioFormatCreationFailed
+enum SpatialAudioError: Error {
+    case engineNotConfigured
+    case decodeFailedNoFile
+    case decodeFailed(OSStatus)
+    case readFailed(OSStatus)
 }
 
 actor SpatialAudioPlayer {
@@ -23,13 +27,13 @@ actor SpatialAudioPlayer {
             standardFormatWithSampleRate: Constants.Audio.sampleRate,
             channels: 1
         ) ?? AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1) else {
-            throw SpatialAudioPlayerError.audioFormatCreationFailed
+            throw SpatialAudioError.decodeFailedNoFile
         }
         outputFormat = format
     }
 
-    func setup() throws {
-        let engine = AVAudioEngine()
+    func setup(engine: AVAudioEngine) {
+        self.engine = engine
         let envNode = AVAudioEnvironmentNode()
         let player = AVAudioPlayerNode()
 
@@ -37,55 +41,40 @@ actor SpatialAudioPlayer {
         engine.attach(player)
 
         // Connect player -> environment -> mainMixer
+        let outputFormat = engine.mainMixerNode.outputFormat(forBus: 0)
         engine.connect(player, to: envNode, format: outputFormat)
-        engine.connect(envNode, to: engine.mainMixerNode, format: nil)
+        engine.connect(envNode, to: engine.mainMixerNode, format: outputFormat)
 
-        self.engine = engine
-        self.environmentNode = envNode
-        self.playerNode = player
+        environmentNode = envNode
+        playerNode = player
 
-        try engine.start()
-        logger.info("Spatial audio engine started")
+        updatePosition(azimuth: azimuth, distance: distance)
+
+        logger.info("Spatial audio player configured")
     }
 
     func play(audioData: Data) async throws {
-        if engine == nil || !(engine?.isRunning ?? false) || playerNode == nil {
-            logger.warning("Audio engine not running, setting up")
-            try setup()
+        guard let playerNode, let engine else {
+            throw SpatialAudioError.engineNotConfigured
         }
 
-        guard let engine, engine.isRunning, let playerNode else {
-            logger.error("Audio engine setup failed")
-            return
+        // Decode Opus/CAF data to PCM buffer
+        let buffer = try decodeOpusData(audioData)
+
+        if !engine.isRunning {
+            try engine.start()
         }
 
-        // Decode Opus data to PCM samples
-        let pcmSamples = decodeOpus(data: audioData)
-        guard !pcmSamples.isEmpty else {
-            logger.warning("No samples decoded from audio data")
-            return
+        playerNode.scheduleBuffer(buffer) {
+            logger.debug("Spatial audio buffer playback completed")
         }
 
-        guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: AVAudioFrameCount(pcmSamples.count)
-        ) else {
-            logger.error("Failed to create PCM buffer")
-            return
-        }
-
-        buffer.frameLength = AVAudioFrameCount(pcmSamples.count)
-        if let channelData = buffer.floatChannelData?[0] {
-            for (i, sample) in pcmSamples.enumerated() {
-                channelData[i] = sample
-            }
-        }
-
-        playerNode.scheduleBuffer(buffer)
         if !playerNode.isPlaying {
             playerNode.play()
         }
-        logger.info("Scheduled \(pcmSamples.count) samples for spatial playback")
+
+        playerNode.volume = volume
+        logger.info("Playing spatial audio (\(audioData.count) bytes)")
     }
 
     func updatePosition(azimuth: Float, distance: Float) {
@@ -93,38 +82,107 @@ actor SpatialAudioPlayer {
         self.distance = distance
 
         guard let environmentNode else { return }
-        environmentNode.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
 
-        // Convert azimuth (degrees) and distance to 3D position
-        let radians = azimuth * .pi / 180.0
-        let x = distance * sin(radians)
-        let z = -distance * cos(radians)
+        // Update 3D source position using azimuth and distance
+        let azimuthRadians = azimuth * .pi / 180.0
+        let x = distance * sin(azimuthRadians)
+        let z = -distance * cos(azimuthRadians)
+
+        environmentNode.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
+        environmentNode.listenerAngularOrientation = AVAudio3DAngularOrientation(
+            yaw: 0, pitch: 0, roll: 0
+        )
 
         if let playerNode {
             playerNode.position = AVAudio3DPoint(x: x, y: 0, z: z)
         }
     }
 
-    func stop() {
-        playerNode?.stop()
-        engine?.stop()
-        engine = nil
-        environmentNode = nil
-        playerNode = nil
-        logger.info("Spatial audio player stopped")
+    func updateVolume(_ newVolume: Float) {
+        self.volume = newVolume
+        playerNode?.volume = newVolume
     }
 
-    // MARK: - Private
+    // MARK: - Opus Decoding
 
-    private func decodeOpus(data: Data) -> [Float] {
-        // Opus decoding requires a third-party library (e.g., libopus).
-        // For now, treat incoming data as raw PCM float32 samples as a fallback.
-        guard data.count >= MemoryLayout<Float>.size else { return [] }
-        let sampleCount = data.count / MemoryLayout<Float>.size
-        return data.withUnsafeBytes { buffer in
-            guard let baseAddress = buffer.baseAddress else { return [Float]() }
-            let floatBuffer = baseAddress.assumingMemoryBound(to: Float.self)
-            return Array(UnsafeBufferPointer(start: floatBuffer, count: sampleCount))
+    private func decodeOpusData(_ data: Data) throws -> AVAudioPCMBuffer {
+        // Write data to a temporary file for ExtAudioFile to read
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString).caf")
+        try data.write(to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        // Open the Opus/CAF file
+        var extFile: ExtAudioFileRef?
+        var status = ExtAudioFileOpenURL(tempURL as CFURL, &extFile)
+        guard status == noErr, let extFile else {
+            throw SpatialAudioError.decodeFailed(status)
         }
+        defer { ExtAudioFileDispose(extFile) }
+
+        // Set client format to PCM Float32 for playback
+        let sampleRate = Constants.Audio.sampleRate
+        var clientFormat = AudioStreamBasicDescription(
+            mSampleRate: sampleRate,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsNonInterleaved,
+            mBytesPerPacket: 4,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 4,
+            mChannelsPerFrame: 1,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+
+        status = ExtAudioFileSetProperty(
+            extFile,
+            kExtAudioFileProperty_ClientDataFormat,
+            UInt32(MemoryLayout<AudioStreamBasicDescription>.size),
+            &clientFormat
+        )
+        guard status == noErr else {
+            throw SpatialAudioError.decodeFailed(status)
+        }
+
+        // Get total frame count
+        var fileLengthFrames: Int64 = 0
+        var propSize = UInt32(MemoryLayout<Int64>.size)
+        ExtAudioFileGetProperty(
+            extFile,
+            kExtAudioFileProperty_FileLengthFrames,
+            &propSize,
+            &fileLengthFrames
+        )
+
+        let frameCount = AVAudioFrameCount(max(fileLengthFrames, Int64(sampleRate)))
+
+        guard let pcmFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: 1,
+            interleaved: false
+        ),
+        let buffer = AVAudioPCMBuffer(pcmFormat: pcmFormat, frameCapacity: frameCount) else {
+            throw SpatialAudioError.decodeFailedNoFile
+        }
+
+        // Read decoded PCM data
+        var bufferList = AudioBufferList(
+            mNumberBuffers: 1,
+            mBuffers: AudioBuffer(
+                mNumberChannels: 1,
+                mDataByteSize: frameCount * 4,
+                mData: buffer.floatChannelData?[0]
+            )
+        )
+
+        var framesRead = frameCount
+        status = ExtAudioFileRead(extFile, &framesRead, &bufferList)
+        guard status == noErr else {
+            throw SpatialAudioError.readFailed(status)
+        }
+
+        buffer.frameLength = framesRead
+        return buffer
     }
 }

@@ -1,7 +1,7 @@
 import { sendEntries, checkHealth } from "./lib/api.js";
 import { count as getQueueCount, dequeueAll, enqueue } from "./lib/queue.js";
 import { DEFAULT_RULES, evaluateRules, isTrackableUrl, migrateBlocklistToRules } from "./lib/filter.js";
-import { getOrCreateKey, encrypt, decrypt } from "./lib/crypto.js";
+import { encrypt, decrypt } from "./lib/crypto.js";
 
 const SETTINGS_KEY = "lifelogSettings";
 const RECENT_ENTRIES_KEY = "lifelogRecentEntries";
@@ -148,35 +148,17 @@ async function ensureHydrated() {
 async function getSettings() {
   const stored = await chrome.storage.local.get({ [SETTINGS_KEY]: DEFAULT_SETTINGS });
   const raw = stored[SETTINGS_KEY];
-
-  // Decrypt token if it was stored encrypted
-  if (raw.token && typeof raw.token === "object" && raw.token.iv && raw.token.ciphertext) {
-    try {
-      const key = await getOrCreateKey();
-      raw.token = await decrypt(key, raw.token);
-    } catch (err) {
-      console.warn("[lifelog] token decryption failed, clearing token:", err);
-      raw.token = "";
-    }
+  // Decrypt token if encrypted
+  if (raw.token && typeof raw.token === "object" && raw.token._encrypted) {
+    raw.token = await decrypt(raw.token);
   }
-
   return sanitizeSettings(raw);
 }
 
 async function saveSettings(nextSettings) {
   const settings = sanitizeSettings(nextSettings);
-  const toStore = { ...settings };
-
-  // Encrypt token before storing
-  if (toStore.token) {
-    try {
-      const key = await getOrCreateKey();
-      toStore.token = await encrypt(key, toStore.token);
-    } catch (err) {
-      console.warn("[lifelog] token encryption failed:", err);
-    }
-  }
-
+  // Encrypt token before persisting
+  const toStore = { ...settings, token: await encrypt(settings.token) };
   await chrome.storage.local.set({ [SETTINGS_KEY]: toStore });
   return settings;
 }
@@ -184,24 +166,11 @@ async function saveSettings(nextSettings) {
 async function getRecentEntries() {
   const stored = await chrome.storage.local.get({ [RECENT_ENTRIES_KEY]: [] });
   const raw = stored[RECENT_ENTRIES_KEY];
-
-  // Backward compatibility: plain array (unencrypted)
-  if (Array.isArray(raw)) return raw;
-
-  // Decrypt encrypted data
-  if (raw && typeof raw === "object" && raw.iv && raw.ciphertext) {
-    try {
-      const key = await getOrCreateKey();
-      const json = await decrypt(key, raw);
-      const parsed = JSON.parse(json);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (err) {
-      console.warn("[lifelog] recentEntries decryption failed:", err);
-      return [];
-    }
+  // Decrypt if stored as encrypted envelope
+  if (raw && typeof raw === "object" && raw._encrypted) {
+    return await decrypt(raw);
   }
-
-  return [];
+  return Array.isArray(raw) ? raw : [];
 }
 
 function contentPreview(content, limit = 200) {
@@ -240,14 +209,7 @@ async function _writeRecentEntry(entry, status) {
     })
   ].slice(0, MAX_RECENT_ENTRIES);
 
-  try {
-    const key = await getOrCreateKey();
-    const encrypted = await encrypt(key, JSON.stringify(nextEntries));
-    await chrome.storage.local.set({ [RECENT_ENTRIES_KEY]: encrypted });
-  } catch (err) {
-    console.warn("[lifelog] recentEntries encryption failed, storing plaintext:", err);
-    await chrome.storage.local.set({ [RECENT_ENTRIES_KEY]: nextEntries });
-  }
+  await chrome.storage.local.set({ [RECENT_ENTRIES_KEY]: await encrypt(nextEntries) });
 }
 
 async function ensureAlarm() {
@@ -830,8 +792,9 @@ chrome.idle.onStateChanged.addListener((newState) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Reject messages from other extensions
+  // Verify message sender is this extension
   if (sender.id !== chrome.runtime.id) return;
+
 
   if (typeof message?.type === "string" && message.type.startsWith("engagement:") && sender.tab?.id) {
     void serializeState(() => handleEngagementMessage(message, sender.tab.id))

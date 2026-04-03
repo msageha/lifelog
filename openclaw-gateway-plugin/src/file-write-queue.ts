@@ -1,14 +1,16 @@
 export class FileWriteQueue {
-  private readonly chains = new Map<string, Promise<void>>();
+  private readonly queues = new Map<string, Promise<void>>();
 
-  enqueue(path: string, fn: () => Promise<void>): Promise<void> {
-    const prev = this.chains.get(path) ?? Promise.resolve();
-    const next = prev.then(fn, () => fn()).then(() => {
-      if (this.chains.get(path) === next) {
-        this.chains.delete(path);
+  async enqueue(filePath: string, writeFn: () => Promise<void>): Promise<void> {
+    const prev = this.queues.get(filePath) ?? Promise.resolve();
+    const next = prev.then(writeFn, () => writeFn());
+    this.queues.set(filePath, next);
+    try {
+      await next;
+    } finally {
+      if (this.queues.get(filePath) === next) {
+        this.queues.delete(filePath);
       }
-    });
-    this.chains.set(path, next);
-    return next;
+    }
   }
 }

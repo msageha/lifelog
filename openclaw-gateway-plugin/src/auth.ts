@@ -7,6 +7,17 @@ function extractBearerToken(header: string | undefined): string | null {
   return match ? match[1] : null;
 }
 
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf-8");
+  const bufB = Buffer.from(b, "utf-8");
+  if (bufA.length !== bufB.length) {
+    // Compare against self to keep constant-time behavior, then return false
+    timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
 export function verifyAuth(
   req: IncomingMessage,
   gatewayToken: string,
@@ -15,9 +26,7 @@ export function verifyAuth(
   if (!token) {
     return { valid: false, error: "Missing or malformed Authorization header" };
   }
-  const a = Buffer.from(token, "utf-8");
-  const b = Buffer.from(gatewayToken, "utf-8");
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+  if (!safeEqual(token, gatewayToken)) {
     return { valid: false, error: "Invalid token" };
   }
   return { valid: true };
